@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseEnv } from '@/lib/env';
+import { costCeilings, externalCredentials, parseEnv } from '@/lib/env';
+
+/**
+ * The environment is where the zero-cost guarantee is anchored, so these tests
+ * are mostly about one question: can a configuration slip cause a bill?
+ */
 
 const valid = {
   NODE_ENV: 'development',
@@ -7,14 +12,12 @@ const valid = {
   DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
   AUTH_SECRET: 'x'.repeat(32),
   ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
-  MOCK_MODE: 'true',
 } satisfies NodeJS.ProcessEnv;
 
 describe('parseEnv', () => {
-  it('accepts a minimal valid environment and applies defaults', () => {
+  it('needs only four values plus a database — no API keys of any kind', () => {
     const env = parseEnv(valid);
     expect(env.LOG_LEVEL).toBe('info');
-    expect(env.AI_PROVIDER).toBe('mock');
     expect(env.CRAWLER_MAX_PAGES).toBe(200);
     expect(env.MAX_DAILY_BUDGET_CENTS).toBe(2000);
   });
@@ -32,67 +35,6 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ ...valid, APP_URL: 'not-a-url' })).toThrow(/APP_URL/);
   });
 
-  it('parses boolean-ish MOCK_MODE values', () => {
-    expect(parseEnv({ ...valid, MOCK_MODE: 'yes' }).MOCK_MODE).toBe(true);
-    expect(parseEnv({ ...valid, MOCK_MODE: '1' }).MOCK_MODE).toBe(true);
-    expect(parseEnv({ ...valid, MOCK_MODE: 'false' }).MOCK_MODE).toBe(false);
-    expect(parseEnv({ ...valid, MOCK_MODE: 'off' }).MOCK_MODE).toBe(false);
-  });
-
-  it('defaults MOCK_MODE to true when unset — no accidental live calls', () => {
-    const { MOCK_MODE: _omitted, ...withoutMockMode } = valid;
-    expect(parseEnv(withoutMockMode).MOCK_MODE).toBe(true);
-  });
-
-  it('refuses mock mode in production', () => {
-    expect(() => parseEnv({ ...valid, NODE_ENV: 'production', MOCK_MODE: 'true' })).toThrow(
-      /must be disabled in production/,
-    );
-  });
-
-  it('exempts the Next.js build phase, which compiles with NODE_ENV=production', () => {
-    // Building locally is not serving traffic; the guard still applies at runtime.
-    expect(() =>
-      parseEnv({
-        ...valid,
-        NODE_ENV: 'production',
-        MOCK_MODE: 'true',
-        NEXT_PHASE: 'phase-production-build',
-      }),
-    ).not.toThrow();
-  });
-
-  it('still refuses mock mode in production under any other NEXT_PHASE', () => {
-    expect(() =>
-      parseEnv({
-        ...valid,
-        NODE_ENV: 'production',
-        MOCK_MODE: 'true',
-        NEXT_PHASE: 'phase-production-server',
-      }),
-    ).toThrow(/must be disabled in production/);
-  });
-
-  it('requires an Anthropic key when the live AI provider is selected', () => {
-    expect(() => parseEnv({ ...valid, MOCK_MODE: 'false', AI_PROVIDER: 'anthropic' })).toThrow(
-      /ANTHROPIC_API_KEY/,
-    );
-  });
-
-  it('allows the anthropic provider to be configured while mock mode is on', () => {
-    expect(() => parseEnv({ ...valid, MOCK_MODE: 'true', AI_PROVIDER: 'anthropic' })).not.toThrow();
-  });
-
-  it('rejects a daily cap above the campaign cap', () => {
-    expect(() =>
-      parseEnv({
-        ...valid,
-        MAX_DAILY_BUDGET_CENTS: '50000',
-        MAX_CAMPAIGN_BUDGET_CENTS: '10000',
-      }),
-    ).toThrow(/cannot exceed MAX_CAMPAIGN_BUDGET_CENTS/);
-  });
-
   it('reports every failure at once rather than one at a time', () => {
     let message = '';
     try {
@@ -102,5 +44,124 @@ describe('parseEnv', () => {
     }
     expect(message).toMatch(/AUTH_SECRET/);
     expect(message).toMatch(/APP_URL/);
+  });
+});
+
+describe('ZERO_COST_MODE', () => {
+  it('defaults to on when unset — a fresh checkout cannot spend money', () => {
+    expect(parseEnv(valid).ZERO_COST_MODE).toBe(true);
+  });
+
+  it('parses the boolean spellings people actually write', () => {
+    expect(parseEnv({ ...valid, ZERO_COST_MODE: 'yes' }).ZERO_COST_MODE).toBe(true);
+    expect(parseEnv({ ...valid, ZERO_COST_MODE: '1' }).ZERO_COST_MODE).toBe(true);
+    expect(parseEnv({ ...valid, ZERO_COST_MODE: 'false' }).ZERO_COST_MODE).toBe(false);
+    expect(parseEnv({ ...valid, ZERO_COST_MODE: 'off' }).ZERO_COST_MODE).toBe(false);
+  });
+
+  it('is allowed in production — simulated advertising is a legitimate deployment', () => {
+    // Earlier this was refused. It should not be: a self-hosted install running
+    // entirely on free providers is exactly what this product is meant to allow.
+    expect(() => parseEnv({ ...valid, NODE_ENV: 'production' })).not.toThrow();
+  });
+});
+
+describe('costCeilings', () => {
+  it('is zero by default, even with zero-cost mode off', () => {
+    // Turning off zero-cost mode alone must not permit any spending — the
+    // ceilings are a second, independent switch.
+    const env = parseEnv({ ...valid, ZERO_COST_MODE: 'false' });
+    expect(costCeilings(env)).toEqual({ dailyCents: 0, monthlyCents: 0, singleCallCents: 50 });
+  });
+
+  it('collapses every configured ceiling to zero while zero-cost mode is on', () => {
+    const env = parseEnv({
+      ...valid,
+      ZERO_COST_MODE: 'true',
+      MAX_DAILY_PROVIDER_COST_CENTS: '500',
+      MAX_MONTHLY_PROVIDER_COST_CENTS: '5000',
+      MAX_SINGLE_CALL_COST_CENTS: '100',
+    });
+    expect(costCeilings(env)).toEqual({ dailyCents: 0, monthlyCents: 0, singleCallCents: 0 });
+  });
+
+  it('honours configured ceilings once zero-cost mode is off', () => {
+    const env = parseEnv({
+      ...valid,
+      ZERO_COST_MODE: 'false',
+      MAX_DAILY_PROVIDER_COST_CENTS: '500',
+      MAX_MONTHLY_PROVIDER_COST_CENTS: '5000',
+      MAX_SINGLE_CALL_COST_CENTS: '100',
+    });
+    expect(costCeilings(env)).toEqual({
+      dailyCents: 500,
+      monthlyCents: 5000,
+      singleCallCents: 100,
+    });
+  });
+
+  it('rejects a daily ceiling above the monthly one — zero means zero', () => {
+    expect(() =>
+      parseEnv({
+        ...valid,
+        MAX_DAILY_PROVIDER_COST_CENTS: '100',
+        MAX_MONTHLY_PROVIDER_COST_CENTS: '0',
+      }),
+    ).toThrow(/cannot exceed MAX_MONTHLY_PROVIDER_COST_CENTS/);
+  });
+});
+
+describe('optional external credentials', () => {
+  it('treats every external service as absent by default', () => {
+    expect(externalCredentials(parseEnv(valid))).toEqual({
+      anthropic: false,
+      imageGeneration: false,
+      s3: false,
+      meta: false,
+    });
+  });
+
+  it('does not require any credential to parse successfully', () => {
+    // The whole point: no API key is ever a required variable.
+    expect(() => parseEnv(valid)).not.toThrow();
+  });
+
+  it('reports a credential as present once configured', () => {
+    const env = parseEnv({ ...valid, ANTHROPIC_API_KEY: 'sk-ant-test' });
+    expect(externalCredentials(env).anthropic).toBe(true);
+  });
+
+  it('rejects partially configured S3 rather than failing at first upload', () => {
+    expect(() => parseEnv({ ...valid, STORAGE_S3_BUCKET: 'my-bucket' })).toThrow(
+      /partially configured/,
+    );
+  });
+
+  it('accepts fully configured S3', () => {
+    expect(() =>
+      parseEnv({
+        ...valid,
+        STORAGE_S3_BUCKET: 'b',
+        STORAGE_S3_REGION: 'r',
+        STORAGE_S3_ACCESS_KEY_ID: 'k',
+        STORAGE_S3_SECRET_ACCESS_KEY: 's',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects a Meta app id without its secret', () => {
+    expect(() => parseEnv({ ...valid, META_APP_ID: '123' })).toThrow(/must be set together/);
+  });
+});
+
+describe('advertising ceilings', () => {
+  it('rejects a daily cap above the campaign cap', () => {
+    expect(() =>
+      parseEnv({
+        ...valid,
+        MAX_DAILY_BUDGET_CENTS: '50000',
+        MAX_CAMPAIGN_BUDGET_CENTS: '10000',
+      }),
+    ).toThrow(/cannot exceed MAX_CAMPAIGN_BUDGET_CENTS/);
   });
 });

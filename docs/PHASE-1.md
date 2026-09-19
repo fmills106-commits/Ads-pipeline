@@ -2,7 +2,10 @@
 
 **Status: complete and verified.**
 
-3,109 lines of TypeScript across 46 source files, 11 test files, one migration.
+Covers Phase 1 and the Phase 1.5 rework that followed it: the zero-cost
+provider architecture ([ZERO-COST.md](ZERO-COST.md)) and the simplified
+interface ([UX.md](UX.md)). Both changed the foundation, so they were done
+before Phase 2 built on top rather than retrofitted afterwards.
 
 ---
 
@@ -137,11 +140,11 @@ distinction and an AI hypothesis can never be styled like a scraped fact.
 
 Every claim below was produced by running the command, not by inspection.
 
-### Tests — 141 passing
+### Tests — 231 passing
 
 ```
-Test Files  11 passed (11)
-     Tests  141 passed (141)
+Test Files  16 passed (16)
+     Tests  231 passed (231)
 ```
 
 | Suite             | Tests | Covers                                                                               |
@@ -195,12 +198,13 @@ $ psql -c '\dt'   # 7 tables + _prisma_migrations
 12 routes, 103 kB shared JS
 ```
 
-### End-to-end over HTTP — 16 checks
+### End-to-end over HTTP — 23 checks
 
 `./scripts/smoke.sh` against a running server. All passed:
 
 ```
 ✓ health reports database up
+✓ running in zero-cost mode — nothing can be charged
 ✓ registered tenant A / tenant B
 ✓ duplicate email rejected (409)
 ✓ weak password rejected (400)
@@ -213,6 +217,12 @@ $ psql -c '\dt'   # 7 tables + _prisma_migrations
 ✓ cross-tenant read refused as 404 (not 403 — existence is not confirmed)
 ✓ cross-tenant write refused as 404
 ✓ tenant B's data was not modified
+✓ completed setup: goal, $10/day budget, Autopilot
+✓ $300/month derived to $9.67/day (rounds down, never over)
+✓ budget above the ceiling refused with an explanation, not capped
+✓ PAUSE EVERYTHING stops the business
+✓ resume restarts it
+✓ cannot pause another tenant's business
 ✓ session revoked immediately on sign-out
 ```
 
@@ -223,30 +233,37 @@ anonymous; `/dashboard` redirects to `/login` when anonymous; `/login` and
 `/register` render; `/dashboard` and `/businesses` render for an authenticated
 user with the correct empty states.
 
-### The production safety guard, confirmed working
+### Running at $0, confirmed
 
-`next start` with `MOCK_MODE=true` **refuses to serve**:
+The health endpoint reports `zeroCostMode: true`, Settings shows every
+capability as `Local / free`, and the Costs page reports **$0.00** with the
+count of free operations. No credential for any paid service exists in the
+test environment or in `.env.test`.
 
-```
-Error: Invalid environment configuration:
-  - MOCK_MODE: must be disabled in production
-```
+An earlier guard refused to _serve_ in production while using simulated
+providers. That was removed: a self-hosted install running entirely on free
+providers is exactly what this product is meant to allow. What replaced it is
+labelling — simulated results carry `isReal: false` in the return type, and the
+dashboard shows a simulation banner — so honesty is preserved without blocking
+the free deployment.
 
-This was observed during verification and is the intended behaviour — a fake
-campaign can never be presented to a merchant as a real one. `next build` is
-exempt, because compiling is not serving; `tests/unit/env.test.ts` asserts both
-halves of that rule.
+### A bug the tests caught
 
----
+`parseBudgetToCents` stripped commas indiscriminately, so `10,5` — how much of
+the world writes ten and a half — parsed as `$105`. A plausible typo became a
+tenfold overspend. Now a comma is accepted only as a genuine thousands
+separator, and ambiguous input is refused rather than guessed.
 
 ## 3. What is deliberately not built
 
 Named explicitly so nothing here reads as working when it is not.
 
 **No external integration has been tested against a live service, because none
-has been written.** There is no AI provider, no image provider, and no
-advertising provider yet — not a stub claiming to work. They arrive in Phases
-3, 4 and 5/6, mock implementation first.
+has been written.** The AI, image, advertising and storage _interfaces_ exist
+and each has a working free implementation. The paid implementations are
+registered so Settings can list them honestly as available-but-off, and calling
+one raises a clear error rather than pretending to work. They arrive in Phases
+3, 4 and 6.
 
 | Not built                                                                | Phase |
 | ------------------------------------------------------------------------ | ----- |
@@ -271,6 +288,11 @@ arrive:
   expensive generation endpoints; the first of those exists in Phase 3.
 - **Workspace switching** — the UI uses the user's first workspace. The data
   model and the API already support many; the picker is UI work for Phase 2.
+- **Enabling a paid provider has no UI yet.** `provider_settings` and the
+  selection logic are in place and tested; the toggle is deferred until there
+  is a paid provider worth enabling (Phase 3).
+- **Simulated ads and results pages** are placeholders in the navigation until
+  Phases 4 and 7 fill them.
 - **Password reset and email verification** are not built. No mail transport is
   configured, and adding one before there is anything to send would be
   speculative.

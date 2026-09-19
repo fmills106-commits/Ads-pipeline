@@ -1,26 +1,39 @@
 # AI Advertising Engine
 
-A general-purpose, multi-tenant platform that takes a business website, builds a
-structured understanding of the business and its products, develops advertising
-strategy, generates and quality-checks creative, launches campaigns through an
-advertising provider, collects performance data, and uses structured experiments
-to improve what it generates next.
+Give it your website. It learns what you sell, works out how to advertise it,
+creates the ads, runs them, measures what happened, and improves what it makes
+next.
+
+For the business owner that is four questions and a dashboard. Underneath it is
+a multi-tenant platform with provider abstraction, structured experiments,
+creative QA, cost ceilings and an audit trail — none of which they ever
+configure.
 
 Nothing in the architecture is specific to an industry, product category, store
-platform, or advertising network. Businesses are onboarded through the same
-flow whatever they sell.
+platform, or advertising network.
+
+## It costs nothing to run
+
+No API key. No hosted service. No subscription. No credit card. A local
+PostgreSQL is the only thing required, and that is free too.
+
+Every capability that _could_ cost money — AI, image generation, advertising,
+storage — has a local implementation that is used by default. Paid services are
+optional upgrades, and reaching one needs **three independent switches** all
+set. Defaults on a fresh clone: zero-cost mode **on**, cost ceilings **$0.00**,
+every paid provider **off**.
+
+See [docs/ZERO-COST.md](docs/ZERO-COST.md).
 
 ## Status
 
-**Phase 1 of 10 is complete and verified.** See [docs/PHASES.md](docs/PHASES.md)
-for the full plan and [docs/PHASE-1.md](docs/PHASE-1.md) for exactly what was
-built, what was tested, and what is deliberately not built yet.
+**Phase 1 complete and verified**, plus the zero-cost provider architecture and
+the simplified interface. See [docs/PHASES.md](docs/PHASES.md) for the plan and
+[docs/PHASE-1.md](docs/PHASE-1.md) for what was built and tested.
 
-Phase 1 delivers the foundation: TypeScript in strict mode, PostgreSQL with
-migrations, session authentication, the multi-tenant isolation layer, an audit
-trail, the background-job schema, structured logging, the error taxonomy, and a
-working UI shell. Website scanning, the AI engines, creative generation, and
-Meta integration arrive in later phases.
+Website scanning, the AI marketing engine, creative generation and Meta
+integration arrive in Phases 2–6. The seams they plug into exist now, each with
+its free implementation already in place.
 
 ## Quick start
 
@@ -28,62 +41,59 @@ Requires Node 20.11+ and PostgreSQL 14+.
 
 ```bash
 npm install
-cp .env.example .env          # then fill in the secrets it names
+cp .env.example .env          # fill in the two generated secrets it names
 npm run db:migrate
 npm run dev                   # http://localhost:3000
 ```
-
-Generate the two required secrets with:
 
 ```bash
 openssl rand -base64 48       # AUTH_SECRET
 openssl rand -base64 32       # ENCRYPTION_KEY
 ```
 
+That is the whole setup. Register, answer four questions, and the dashboard is
+live — running entirely on local providers.
+
 ## Verification
 
 ```bash
-npm run verify                # format check, lint, typecheck, all tests
+npm run verify                # format, lint, typecheck, all tests
 npm run test:unit             # no external services needed
 npm run test:db               # needs PostgreSQL; uses .env.test
 ./scripts/smoke.sh            # end-to-end over HTTP, against a running dev server
 ```
 
-`npm run test:db` and `scripts/smoke.sh` are the ones that matter for tenancy:
-they prove over a real database and a real HTTP stack that one business's data
-cannot be read or written from another's session.
-
-## Mock mode
-
-`MOCK_MODE=true` (the default outside production) makes every external
-provider — AI, image generation, advertising platforms, and the crawler's
-network layer — resolve to a deterministic in-process fake. The whole pipeline
-is developed and tested this way, with no credentials and no ad spend.
-
-The application refuses to start with `NODE_ENV=production` and mock mode on,
-so a fake campaign can never be presented to a merchant as a real one. (The
-`next build` step is exempt, because building is not serving.)
+The suite runs at $0 by construction — `.env.test` holds no credential for any
+paid service.
 
 ## Documentation
 
-| Document                                     | Contents                                                         |
-| -------------------------------------------- | ---------------------------------------------------------------- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layering, tenancy model, provider abstractions, security posture |
-| [docs/SCHEMA.md](docs/SCHEMA.md)             | The full target database schema and which phase adds each table  |
-| [docs/PHASES.md](docs/PHASES.md)             | The ten-phase plan and the definition of done                    |
-| [docs/PHASE-1.md](docs/PHASE-1.md)           | Phase 1 report: what was built, what was verified, what remains  |
+| Document                                     | Contents                                                       |
+| -------------------------------------------- | -------------------------------------------------------------- |
+| [docs/ZERO-COST.md](docs/ZERO-COST.md)       | How $0 operation is enforced rather than promised              |
+| [docs/UX.md](docs/UX.md)                     | The four-question setup, three automation modes, activity feed |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layering, tenancy, providers, security posture                 |
+| [docs/SCHEMA.md](docs/SCHEMA.md)             | Full target database schema, phase by phase                    |
+| [docs/PHASES.md](docs/PHASES.md)             | The ten-phase plan and the definition of done                  |
+| [docs/PHASE-1.md](docs/PHASE-1.md)           | Phase 1 report: built, verified, and what remains              |
 
-## Safety posture
+## What is structural, not advisory
 
-Three things are structural rather than advisory:
+**Money.** Spending requires three independent switches. Advertising budgets
+are the lower of what the owner stated and what the deployment permits, and no
+automation level lets the AI raise either. A budget above the ceiling is
+refused with an explanation rather than silently capped.
 
-- **Money.** Platform-wide spending ceilings come from environment
-  configuration. A business can be configured to spend less, never more, and no
-  automation level lets the AI raise them.
-- **Tenancy.** Business-scoped data is reachable only through a capability
-  object returned by a membership check. A cross-tenant reference is reported as
-  404, never 403 — confirming that a record exists in someone else's workspace
-  is itself a leak.
-- **Truth.** Verified facts extracted from a merchant's own website and AI
-  inferences are separate concepts in the data model and in the UI. An AI
-  hypothesis is never rendered as a business fact.
+**Tenancy.** Business-scoped data is reachable only through a capability object
+returned by a membership check — a missing tenant filter does not typecheck. A
+cross-tenant reference returns 404, never 403: confirming a record exists in
+someone else's workspace is itself a leak.
+
+**Truth.** Verified facts scraped from a merchant's own site and AI inferences
+are separate tables with separate UI treatment. Simulated campaigns and
+simulated metrics carry `isReal: false` in the return type, not as a
+convention. An AI hypothesis is never rendered as a business fact.
+
+**Stopping.** One button pauses everything, with no confirmation dialog in the
+way. The flag lives on the business, so it stops work that has not been created
+yet — a background job checks it before doing anything.

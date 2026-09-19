@@ -37,6 +37,25 @@ production build, and a 16-check end-to-end smoke test over HTTP.
 
 Full report: [PHASE-1.md](PHASE-1.md).
 
+## Phase 1.5 — Zero cost and a simple interface ✅
+
+Two constraints that change the foundation, done before Phase 2 builds on it
+rather than retrofitted afterwards.
+
+**Zero cost.** `ZERO_COST_MODE` as the master switch, a provider registry with
+`LOCAL_FREE` / `EXTERNAL_PAID` tiers, free implementations for AI, image
+generation, advertising and storage, a cost ledger with hard stops and
+fallback-to-free, and a guard that makes a silent paid call inexpressible. See
+[ZERO-COST.md](ZERO-COST.md).
+
+**Simple interface.** Four-question setup, three automation modes replacing a
+four-level scale, budget stated as `$10/day` or `$300/month` with every
+internal limit derived from it, a plain-language activity feed alongside the
+technical audit log, PAUSE EVERYTHING, and navigation cut from eleven items to
+five. See [UX.md](UX.md).
+
+Verified: 231 automated tests, clean build, 23-check end-to-end smoke test.
+
 ## Phase 2 — Business onboarding
 
 Website scanner with a per-host rate limiter and robots.txt compliance;
@@ -48,12 +67,17 @@ worker loop; rescan with content-hash change detection and product versioning.
 The second SSRF gate — re-validating the resolved IP immediately before
 connecting — lands here, alongside the first fetch the platform ever makes.
 
+Runs on free providers throughout — the crawler fetches public pages, which
+costs nothing.
+
 Exit criterion: two materially different real websites onboarded through the
 normal flow, with products discovered and facts traceable to URLs.
 
 ## Phase 3 — AI marketing engine
 
-`AIProvider` interface plus a mock implementation, then Anthropic. All model
+The `AIProvider` interface and its free `ai.local` implementation already
+exist; this phase builds the engines that use them, and adds the optional
+Anthropic provider behind the same seam. All model
 output validated against Zod schemas with a repair-then-retry-then-fail path;
 malformed data never passes downstream. Business and product analysis;
 marketing strategies with structured reasoning rather than invented scores;
@@ -75,9 +99,11 @@ never publishes.
 ## Phase 5 — Campaign engine
 
 Campaign builder; ad sets and ads; the budget guard enforcing the lower of the
-platform and per-business ceilings; approval thresholds; the emergency
-"pause all campaigns" control. `AdvertisingProvider` with a mock
-implementation — no real spend, no real credentials.
+platform and per-business ceilings; approval thresholds. Runs against
+`advertising.simulated`, which already exists — no real spend, no credentials.
+
+The emergency pause control and the derived budget ceilings shipped in Phase
+1.5 and already gate everything this phase creates.
 
 ## Phase 6 — Meta integration
 
@@ -86,8 +112,9 @@ token storage; ad-account selection; campaign, ad set, creative and ad creation;
 insights synchronisation; webhook handling with signature verification and
 idempotency.
 
-Real credentials are introduced only after the Phase 5 mock pipeline passes the
-definition-of-done test end to end.
+Real credentials are introduced only after the Phase 5 simulated pipeline
+passes the definition-of-done test end to end. Meta remains an optional
+provider: the application must still run fully without it.
 
 ## Phase 7 — Analytics
 
@@ -108,9 +135,13 @@ from mixing between businesses.
 
 ## Phase 10 — Automation
 
-Scheduled scanning and synchronisation; the rules engine with configurable
-conditions; automation levels 1–4; spending safeguards that no automation level
-can bypass.
+Scheduled scanning and synchronisation; the rules engine; per-business
+generation caps; provider routing that weighs quality, speed, reliability and
+cost per task — a cheap local model for website classification, a more capable
+one reserved for high-value creative strategy.
+
+The three automation modes and the spending safeguards they cannot bypass
+shipped in Phase 1.5.
 
 ---
 
@@ -140,6 +171,10 @@ end-to-end test is:
 19. Verify historical data remains intact
 20. Verify tenant isolation
 
-Steps 19 and 20 hold as of Phase 1 and are re-asserted by the test suite on
-every change. Real Meta credentials are introduced only after steps 1–20 pass
-against mock providers.
+Steps 19 and 20 hold today and are re-asserted by the test suite on every
+change.
+
+**The entire cycle must complete for $0** — no money spent, no real ads
+generated, no user charged, no paid API called. Real Meta credentials are
+introduced only after steps 1–20 pass against the free providers, and even
+then remain optional.

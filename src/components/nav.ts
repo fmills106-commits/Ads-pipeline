@@ -1,30 +1,27 @@
 /**
- * The application's primary navigation (§26).
+ * Primary navigation.
  *
- * Declared as data so the shell renders from one list. Sections whose phase
- * has not shipped are marked `available: false` — they appear, disabled, with
- * the phase that will bring them. Showing the shape of the finished product
- * while being honest about what works is better than either hiding it or
- * linking to a stub that 404s.
+ * Five items, not eleven. The earlier list mirrored the system's internals —
+ * Websites, Products, Creatives, Experiments, Offers, Integrations — which is
+ * how the engineers think about it and not how a business owner does.
+ *
+ * What an owner needs is: how is it going, what are the ads, what did it cost,
+ * and where do I change things. Products, experiments, offers and creative
+ * versions are all still there; they live inside these screens rather than
+ * demanding their own tab.
  */
 export interface NavItem {
   label: string;
   href: string;
   available: boolean;
-  /** Phase that delivers this section; shown as a tooltip when unavailable. */
+  /** Phase that delivers this section, shown when unavailable. */
   phase: number;
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { label: 'Dashboard', href: '/dashboard', available: true, phase: 1 },
-  { label: 'Businesses', href: '/businesses', available: true, phase: 1 },
-  { label: 'Websites', href: '/websites', available: false, phase: 2 },
-  { label: 'Products', href: '/products', available: false, phase: 2 },
-  { label: 'Campaigns', href: '/campaigns', available: false, phase: 5 },
-  { label: 'Creatives', href: '/creatives', available: false, phase: 4 },
-  { label: 'Experiments', href: '/experiments', available: false, phase: 8 },
-  { label: 'Analytics', href: '/analytics', available: false, phase: 7 },
-  { label: 'Offers', href: '/offers', available: false, phase: 3 },
-  { label: 'Integrations', href: '/integrations', available: false, phase: 6 },
+  { label: 'Overview', href: '/dashboard', available: true, phase: 1 },
+  { label: 'Ads', href: '/ads', available: false, phase: 4 },
+  { label: 'Results', href: '/results', available: false, phase: 7 },
+  { label: 'Costs', href: '/costs', available: true, phase: 1 },
   { label: 'Settings', href: '/settings', available: true, phase: 1 },
 ] as const;

@@ -1,0 +1,190 @@
+import type { ProviderCapability, ProviderTier } from '@prisma/client';
+
+/**
+ * The provider system.
+ *
+ * Every capability that *could* cost money sits behind one of these. The
+ * contract that makes the zero-cost guarantee real is not a convention — it is
+ * this type:
+ *
+ *   - every capability has at least one `LOCAL_FREE` implementation, so the
+ *     application is fully functional with every external service disabled;
+ *   - an `EXTERNAL_PAID` implementation is unreachable unless three
+ *     independent switches are all set (zero-cost mode off, a non-zero cost
+ *     ceiling, and that specific provider enabled for the workspace);
+ *   - nothing calls a provider directly. Calls go through `runProvider`, which
+ *     checks ceilings first and records the cost after, so a paid call that
+ *     leaves no trace is not expressible.
+ */
+
+export type { ProviderCapability, ProviderTier };
+
+/** Registry key, e.g. `ai.local`. Namespaced by capability so it reads well in logs. */
+export type ProviderKey = string;
+
+export interface ProviderDescriptor {
+  key: ProviderKey;
+  capability: ProviderCapability;
+  tier: ProviderTier;
+  /** Shown in Settings. Plain language — the owner reads this. */
+  label: string;
+  /** One sentence on what changes if this is used. */
+  description: string;
+  /**
+   * Priority when several providers for a capability are available and
+   * enabled. Higher wins. Free providers sit at 0; a paid provider a merchant
+   * has deliberately enabled outranks it.
+   */
+  priority: number;
+  /**
+   * Whether the deployment has what this provider needs — an API key, a
+   * bucket. `false` means it cannot be selected however it is configured.
+   */
+  isConfigured: () => boolean;
+}
+
+/**
+ * What a provider reports about an invocation, so cost can be recorded.
+ *
+ * A `LOCAL_FREE` provider returns zeros. That is not a formality: recording
+ * free calls is what lets the dashboard say "1,284 AI calls this month, $0.00",
+ * which is the single most useful fact about running in zero-cost mode.
+ */
+export interface ProviderUsage {
+  units: number;
+  unitLabel: string;
+  /** Predicted before the call, checked against ceilings. Zero for free tiers. */
+  estimatedCostCents: number;
+  /** Reported by the provider afterwards. Null when genuinely unknown — never guessed. */
+  actualCostCents: number | null;
+  model?: string;
+}
+
+export const FREE_USAGE = (units: number, unitLabel: string): ProviderUsage => ({
+  units,
+  unitLabel,
+  estimatedCostCents: 0,
+  actualCostCents: 0,
+});
+
+/** Every provider implementation carries its descriptor. */
+export interface Provider {
+  readonly descriptor: ProviderDescriptor;
+}
+
+/** Result of one invocation: the value, plus what it cost. */
+export interface ProviderResult<T> {
+  value: T;
+  usage: ProviderUsage;
+}
+
+// ---------------------------------------------------------------------------
+// Capability interfaces
+// ---------------------------------------------------------------------------
+// Declared together so the seams the platform commits to are visible in one
+// place. Implementations land with the phase that needs them; each capability
+// gets its local, free implementation first.
+
+export interface AIProvider extends Provider {
+  /**
+   * Produces structured output conforming to the caller's schema.
+   *
+   * Deliberately narrow: one method, structured in and structured out. The
+   * marketing engine never asks a provider for prose — it asks for a shape it
+   * can validate, which is what makes swapping providers safe.
+   */
+  complete<T>(request: AICompletionRequest<T>): Promise<ProviderResult<T>>;
+}
+
+export interface AICompletionRequest<T> {
+  /** What this call is for, e.g. `business.analyse`. Used for cost attribution. */
+  task: string;
+  /** Application instruction. Trusted. */
+  instruction: string;
+  /**
+   * Untrusted input — scraped page text, product descriptions. Passed
+   * separately from `instruction` so it can be delimited as data and never
+   * interpreted as instruction.
+   */
+  data?: Record<string, string>;
+  /** Validates the response. Malformed output never reaches the caller. */
+  parse: (raw: unknown) => T;
+  maxOutputTokens?: number;
+}
+
+export interface ImageGenerationProvider extends Provider {
+  generate(request: ImageGenerationRequest): Promise<ProviderResult<GeneratedImage>>;
+}
+
+export interface ImageGenerationRequest {
+  prompt: string;
+  width: number;
+  height: number;
+  /** Product photography and brand assets to compose with, as storage keys. */
+  sourceAssetKeys?: string[];
+  seed?: number;
+}
+
+export interface GeneratedImage {
+  bytes: Buffer;
+  mimeType: string;
+  width: number;
+  height: number;
+}
+
+export interface AdvertisingProvider extends Provider {
+  listAdAccounts(): Promise<ProviderResult<AdAccount[]>>;
+  createCampaign(input: CampaignInput): Promise<ProviderResult<ExternalRef>>;
+  pauseCampaign(externalId: string): Promise<ProviderResult<void>>;
+  resumeCampaign(externalId: string): Promise<ProviderResult<void>>;
+  getCampaignInsights(externalId: string, range: DateRange): Promise<ProviderResult<Insights>>;
+}
+
+export interface AdAccount {
+  externalId: string;
+  name: string;
+  currency: string;
+}
+
+export interface CampaignInput {
+  name: string;
+  objective: string;
+  dailyBudgetCents: number;
+  startsAt: Date;
+  endsAt?: Date;
+}
+
+export interface ExternalRef {
+  externalId: string;
+  /** False for simulated campaigns — surfaced in the UI, never hidden. */
+  isReal: boolean;
+}
+
+export interface DateRange {
+  from: Date;
+  to: Date;
+}
+
+export interface Insights {
+  impressions: number;
+  clicks: number;
+  spendCents: number;
+  purchases: number;
+  purchaseValueCents: number;
+  /** False when these numbers are simulated. */
+  isReal: boolean;
+}
+
+export interface StorageProvider extends Provider {
+  put(key: string, bytes: Buffer, mimeType: string): Promise<ProviderResult<StoredObject>>;
+  get(key: string): Promise<ProviderResult<Buffer>>;
+  delete(key: string): Promise<ProviderResult<void>>;
+  /** A URL the browser can load. For local storage, an app-served route. */
+  urlFor(key: string): string;
+}
+
+export interface StoredObject {
+  key: string;
+  bytes: number;
+  mimeType: string;
+}

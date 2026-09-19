@@ -1,5 +1,7 @@
 import { z } from 'zod';
+import type { Business } from '@prisma/client';
 import { route } from '@/server/api/handler';
+import { isOnboarded } from '@/server/business/onboarding';
 import { createBusiness, listBusinesses } from '@/server/business/service';
 import { requireWorkspaceContext } from '@/server/tenancy/context';
 import { validationError } from '@/lib/errors';
@@ -43,20 +45,7 @@ export const POST = route({ schema: createSchema }, async ({ body, user }) => {
 });
 
 /** The client-visible shape. Internal columns stay server-side. */
-function serialiseBusiness(business: {
-  id: string;
-  name: string;
-  industry: string | null;
-  websiteUrl: string | null;
-  description: string | null;
-  currency: string;
-  timezone: string;
-  automationLevel: string;
-  maxDailyBudgetCents: number;
-  maxCampaignBudgetCents: number;
-  archivedAt: Date | null;
-  createdAt: Date;
-}) {
+function serialiseBusiness(business: Business) {
   return {
     id: business.id,
     name: business.name,
@@ -65,9 +54,22 @@ function serialiseBusiness(business: {
     description: business.description,
     currency: business.currency,
     timezone: business.timezone,
-    automationLevel: business.automationLevel,
+
+    // The four owner-chosen values. Null until setup is finished.
+    goal: business.goal,
+    budgetAmountCents: business.budgetAmountCents,
+    budgetPeriod: business.budgetPeriod,
+    automationMode: business.automationMode,
+    onboarded: isOnboarded(business),
+
+    paused: business.pausedAt !== null,
+    pauseReason: business.pauseReason,
+
+    // Derived safeguards, exposed read-only so a client can display them but
+    // never set them — raising a spending ceiling is not an API operation.
     maxDailyBudgetCents: business.maxDailyBudgetCents,
     maxCampaignBudgetCents: business.maxCampaignBudgetCents,
+
     archived: business.archivedAt !== null,
     createdAt: business.createdAt.toISOString(),
   };

@@ -16,4 +16,4 @@ env.AUTH_SECRET ??= 'unit-test-auth-secret-at-least-32-chars-long';
 env.ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString('base64');
 env.LOG_LEVEL ??= 'error';
 env.LOG_FORMAT ??= 'json';
-env.MOCK_MODE ??= 'true';
+env.ZERO_COST_MODE ??= 'true';

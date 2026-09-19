@@ -7,8 +7,9 @@ them. Twenty-five empty tables added up front would be twenty-five guesses; each
 one below is specified here so the shape is agreed, and migrated when it earns
 its place.
 
-**Migrated so far (Phase 1):** `users`, `sessions`, `workspaces`,
-`workspace_memberships`, `businesses`, `audit_logs`, `jobs`.
+**Migrated so far:** `users`, `sessions`, `workspaces`,
+`workspace_memberships`, `businesses`, `audit_logs`, `jobs`,
+`provider_settings`, `cost_records`, `activity_events`.
 
 ---
 
@@ -50,10 +51,21 @@ Unique on `(userId, workspaceId)`.
 
 The tenant boundary for all advertising data.
 `id`, `workspaceId`, `name`, `industry`, `websiteUrl`, `description`,
-`currency`, `timezone`, `automationLevel` (`MANUAL|ASSISTED|SUPERVISED|AUTONOMOUS`,
-default `MANUAL`), `maxDailyBudgetCents`, `maxCampaignBudgetCents`,
-`budgetApprovalThresholdCents`, `archivedAt`, timestamps.
+`currency`, `timezone`, `archivedAt`, timestamps.
 Unique on `(workspaceId, name)`.
+
+**The four things the owner chooses**, and nothing else:
+`goal` (`SALES|LEADS|CUSTOMERS|AWARENESS`), `budgetAmountCents` +
+`budgetPeriod` (`DAILY|MONTHLY`) stored exactly as entered, and
+`automationMode` (`AUTOPILOT|ASK_ME_FIRST|MANUAL`, default `ASK_ME_FIRST`).
+Null goal/budget means setup is unfinished, and nothing can spend.
+
+**Emergency stop:** `pausedAt`, `pauseReason`. While `pausedAt` is non-null
+nothing launches, spends, or runs automation — including work not yet created.
+
+**Derived safeguards**, computed from the stated budget rather than typed in:
+`maxDailyBudgetCents`, `maxCampaignBudgetCents`,
+`budgetApprovalThresholdCents`. Always intersected with the platform ceilings.
 
 ### `audit_logs`
 
@@ -71,6 +83,42 @@ automation made each decision.
 `result`, `attempts`, `maxAttempts`, `runAt`, `startedAt`, `completedAt`,
 `lastError`, `idempotencyKey` (unique), timestamps.
 Indexed on `(status, runAt, priority)` for the claim query.
+
+### `provider_settings`
+
+Per-workspace opt-in for one provider implementation.
+`id`, `workspaceId`, `capability`, `providerKey`, `tier`
+(`LOCAL_FREE|EXTERNAL_PAID`), `enabled` (default **false**),
+`maxDailyCostCents?`, `maxMonthlyCostCents?`, `enabledBy?`, `enabledAt?`.
+Unique on `(workspaceId, capability, providerKey)`.
+
+A capability with no row here uses its free implementation — so the
+application works fully with this table empty, which is the default state.
+
+### `cost_records`
+
+Append-only, one row per provider invocation, **free or paid**.
+`id`, `workspaceId`, `businessId?`, `kind`, `capability`, `providerKey`,
+`tier`, `model?`, `units`, `unitLabel`, `estimatedCostCents`,
+`actualCostCents?`, `subjectType?`, `subjectId?`, `succeeded`, `errorCode?`,
+`createdAt`.
+
+Free calls are recorded deliberately: "1,284 operations this month, $0.00" is
+the most useful thing the cost page can say, and it needs the rows to say it.
+`actualCostCents` is null when genuinely unknown — never back-filled with a
+guess.
+
+### `activity_events`
+
+The owner-facing feed, separate from `audit_logs` by design.
+`id`, `workspaceId`, `businessId`, `kind`, `severity`
+(`INFO|NOTICE|ATTENTION`), `message`, `detail?`, `needsAttention`,
+`resolvedAt?`, `createdAt`.
+
+`message` is one plain sentence composed server-side from verified values — a
+model's prose never becomes an activity message, or the feed would inherit
+every hallucination. Everything here is also in the audit log; not everything
+in the audit log belongs here.
 
 ---
 
@@ -350,10 +398,5 @@ A database constraint enforces that every non-`GLOBAL` layer has a
 ROAS_BELOW`), `condition` (JSON), `action`, `enabled`, `requiresApproval`,
 `lastFiredAt?`.
 
-### `cost_records`
-
-`id`, `businessId`, `kind` (`AI_CALL|IMAGE_GENERATION|API_CALL`), `provider`,
-`model?`, `quantity`, `estimatedCostCents`, `subjectType?`, `subjectId?`,
-`createdAt`.
-
-Feeds the usage view and the configurable caps in §40.
+`cost_records` already exists — see Phase 1 above. Phase 10 adds the
+per-business generation caps that read from it.

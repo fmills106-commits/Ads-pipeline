@@ -21,7 +21,7 @@ export async function GET(): Promise<NextResponse> {
     {
       status: database === 'up' ? 'ok' : 'degraded',
       database,
-      mockMode: env.MOCK_MODE,
+      zeroCostMode: env.ZERO_COST_MODE,
       timestamp: new Date().toISOString(),
     },
     { status: database === 'up' ? 200 : 503 },

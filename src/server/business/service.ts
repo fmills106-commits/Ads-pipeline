@@ -55,7 +55,10 @@ export async function createBusiness(
       timezone: input.timezone ?? 'UTC',
       // Start at the safest automation level and the platform ceilings; the
       // merchant raises these deliberately, and each change is audited.
-      automationLevel: 'MANUAL',
+      // Goal, budget and automation are set in onboarding steps 2-4. Until
+      // then the business exists but cannot spend: `goal` and `budgetAmountCents`
+      // are null, and every spending path requires them.
+      automationMode: 'ASK_ME_FIRST',
       maxDailyBudgetCents: env.MAX_DAILY_BUDGET_CENTS,
       maxCampaignBudgetCents: env.MAX_CAMPAIGN_BUDGET_CENTS,
       budgetApprovalThresholdCents: env.BUDGET_APPROVAL_THRESHOLD_CENTS,

@@ -82,10 +82,12 @@ model Workspace {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships WorkspaceMembership[]
-  businesses  Business[]
-  auditLogs   AuditLog[]
-  jobs        Job[]
+  memberships      WorkspaceMembership[]
+  businesses       Business[]
+  auditLogs        AuditLog[]
+  jobs             Job[]
+  providerSettings ProviderSetting[]
+  costRecords      CostRecord[]
 
   @@map("workspaces")
 }
@@ -112,17 +114,43 @@ model WorkspaceMembership {
 }
 
 /// How much the platform may do without a human pressing the button.
-/// Defaults to the most restrictive level; raising it is an explicit,
-/// audited choice by the merchant.
-enum AutomationLevel {
-  /// L1 — everything requires approval.
+///
+/// Three choices, not a matrix of thresholds. The business owner picks one
+/// sentence about how much they want to be involved; every internal safeguard
+/// — budget caps, QA gates, claim checks, experiment stopping rules — applies
+/// identically at all three levels and is never something they configure.
+enum AutomationMode {
+  /// The AI plans, creates, launches and optimises within the stated budget.
+  /// It still stops and asks whenever something important is uncertain.
+  AUTOPILOT
+  /// The AI prepares everything and asks before anything goes live or
+  /// anything starts spending.
+  ASK_ME_FIRST
+  /// The AI creates recommendations and creatives; the owner approves each
+  /// action individually.
   MANUAL
-  /// L2 — creative generation is automatic; publishing requires approval.
-  ASSISTED
-  /// L3 — campaign creation is automatic within spending limits.
-  SUPERVISED
-  /// L4 — fully automated within merchant-defined rules.
-  AUTONOMOUS
+}
+
+/// What the business owner is actually trying to achieve, in their words.
+/// Mapped internally to platform campaign objectives — the owner never sees
+/// "CONVERSIONS" or "OUTCOME_SALES".
+enum BusinessGoal {
+  /// "Get more sales"
+  SALES
+  /// "Get more leads"
+  LEADS
+  /// "Get more customers"
+  CUSTOMERS
+  /// "Grow awareness"
+  AWARENESS
+}
+
+/// How the owner expressed their budget. Stored as entered so the UI can show
+/// it back in their own terms; the daily figure the system actually spends
+/// against is derived (see src/lib/budget.ts).
+enum BudgetPeriod {
+  DAILY
+  MONTHLY
 }
 
 /// One advertised business. This is the tenant boundary for all campaign data:
@@ -143,10 +171,30 @@ model Business {
   /// IANA timezone, used for scheduling and for day-boundary reporting.
   timezone    String  @default("UTC")
 
-  automationLevel AutomationLevel @default(MANUAL)
+  // --- The four things the owner actually chooses -------------------------
+  // Everything else about how this business is advertised is decided by the
+  // system. Null goal/budget means onboarding has not finished yet.
 
-  /// Per-business spending ceilings, in minor units. Always intersected with
-  /// the platform-wide ceilings from env; the lower of the two wins.
+  /// Step 2 of onboarding.
+  goal BusinessGoal?
+
+  /// Step 3. Stored exactly as entered — "$10/day" or "$300/month" — so it can
+  /// be shown back in the owner's own words.
+  budgetAmountCents Int?
+  budgetPeriod      BudgetPeriod?
+
+  /// Step 4.
+  automationMode AutomationMode @default(ASK_ME_FIRST)
+
+  /// Set by the PAUSE EVERYTHING control. While non-null nothing launches,
+  /// nothing spends, and no automation runs for this business.
+  pausedAt    DateTime?
+  /// Why it paused: a person pressed the button, or a safeguard tripped.
+  pauseReason String?
+
+  // --- Internal safeguards, not owner-facing -------------------------------
+  // Intersected with the platform-wide ceilings from env; the lower wins.
+  // Derived from the stated budget at onboarding, not typed in by the owner.
   maxDailyBudgetCents          Int @default(2000)
   maxCampaignBudgetCents       Int @default(10000)
   budgetApprovalThresholdCents Int @default(5000)
@@ -155,8 +203,10 @@ model Business {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  auditLogs AuditLog[]
-  jobs      Job[]
+  auditLogs      AuditLog[]
+  jobs           Job[]
+  activityEvents ActivityEvent[]
+  costRecords    CostRecord[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
@@ -267,4 +317,167 @@ model Job {
   @@index([workspaceId, createdAt])
   @@index([businessId, type, createdAt])
   @@map("jobs")
+}
+
+// -----------------------------------------------------------------------------
+// Provider configuration
+// -----------------------------------------------------------------------------
+// Which implementation serves each capability, and whether it may cost money.
+// A capability with no row here uses its local, free implementation — so the
+// application works fully with this table empty, which is the default state.
+
+enum ProviderCapability {
+  AI
+  IMAGE_GENERATION
+  ADVERTISING
+  STORAGE
+  ANALYTICS
+  SEARCH
+  EMBEDDING
+}
+
+/// Whether using this provider can result in a bill.
+enum ProviderTier {
+  /// Runs on this machine. Always available, always free.
+  LOCAL_FREE
+  /// An external service that charges. Never used unless explicitly enabled.
+  EXTERNAL_PAID
+}
+
+/// Per-workspace opt-in for a specific provider implementation.
+///
+/// Enabling a paid provider takes a deliberate act here AND `ZERO_COST_MODE`
+/// off AND a non-zero cost ceiling. Three independent switches, because a
+/// single misconfiguration should never be able to start a bill.
+model ProviderSetting {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  capability  ProviderCapability
+  /// Registry key of the implementation, e.g. `ai.local` or `ai.anthropic`.
+  providerKey String
+  tier        ProviderTier
+
+  enabled Boolean @default(false)
+
+  /// Optional per-provider ceiling, in minor units. Null means "no ceiling of
+  /// its own" — the workspace and platform ceilings still apply.
+  maxDailyCostCents   Int?
+  maxMonthlyCostCents Int?
+
+  enabledBy String?   @db.Uuid
+  enabledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workspaceId, capability, providerKey])
+  @@index([workspaceId, capability])
+  @@map("provider_settings")
+}
+
+// -----------------------------------------------------------------------------
+// Cost tracking
+// -----------------------------------------------------------------------------
+
+enum CostKind {
+  AI_CALL
+  IMAGE_GENERATION
+  STORAGE
+  API_CALL
+  EMBEDDING
+  SEARCH
+}
+
+/// One row per provider invocation, free or paid.
+///
+/// Free calls are recorded too, deliberately: "we ran 400 AI calls this month
+/// and they cost $0 because they were local" is exactly the fact the cost
+/// dashboard needs to show. Append-only.
+model CostRecord {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  businessId  String?   @db.Uuid
+  business    Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  kind        CostKind
+  capability  ProviderCapability
+  /// Registry key of the implementation that actually ran.
+  providerKey String
+  tier        ProviderTier
+  model       String?
+
+  /// Units consumed — tokens, images, bytes, requests. Meaning depends on kind.
+  units     Int     @default(0)
+  unitLabel String?
+
+  /// What it was expected to cost, checked against ceilings BEFORE the call.
+  estimatedCostCents Int  @default(0)
+  /// What it actually cost, when the provider reports it. Null when unknown —
+  /// never back-filled with a guess.
+  actualCostCents    Int?
+
+  /// What the call was for, so spend can be attributed to a feature.
+  subjectType String?
+  subjectId   String?
+
+  succeeded Boolean @default(true)
+  errorCode String?
+
+  createdAt DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([businessId, createdAt])
+  @@index([workspaceId, tier, createdAt])
+  @@index([capability, createdAt])
+  @@map("cost_records")
+}
+
+// -----------------------------------------------------------------------------
+// Owner-facing activity feed
+// -----------------------------------------------------------------------------
+// Distinct from `audit_logs` on purpose. The audit log is a complete technical
+// record for debugging and accountability. This is the short, plain-language
+// story a business owner reads: "Created 3 new ad variations."
+//
+// Everything here is also in the audit log; not everything in the audit log
+// belongs here.
+
+enum ActivitySeverity {
+  /// Routine progress. "Created 3 new ad variations."
+  INFO
+  /// Something worth knowing. "Product price changed; ads updated."
+  NOTICE
+  /// Needs a decision. "Paused an ad because the product is unavailable."
+  ATTENTION
+}
+
+model ActivityEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  businessId  String   @db.Uuid
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  /// Stable machine key, e.g. `creatives.generated`. Drives the icon.
+  kind     String
+  severity ActivitySeverity @default(INFO)
+
+  /// One sentence, already written for a non-technical reader. Composed
+  /// server-side from verified values — never free text from a model.
+  message String
+
+  /// Optional structured detail for a "show me more" expansion.
+  detail Json?
+
+  /// True when the owner needs to do something about this.
+  needsAttention Boolean   @default(false)
+  resolvedAt     DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([businessId, createdAt])
+  @@index([businessId, needsAttention])
+  @@map("activity_events")
 }

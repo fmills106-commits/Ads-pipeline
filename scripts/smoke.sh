@@ -46,6 +46,8 @@ echo "Smoke test against $BASE"
 [ "$(get "$JAR_A" /api/health)" = 200 ] || fail 'health endpoint unreachable'
 grep -q '"database":"up"' "$BODY" || fail 'database not reachable'
 pass 'health reports database up'
+grep -q '"zeroCostMode":true' "$BODY" || fail 'not running in zero-cost mode'
+pass 'running in zero-cost mode — nothing can be charged'
 
 # --- registration ---------------------------------------------------------------
 code=$(post "$JAR_A" /api/auth/register \
@@ -93,8 +95,9 @@ code=$(post "$JAR_A" /api/businesses \
   "{\"workspaceId\":\"$WS_A\",\"name\":\"Alpine Coffee $STAMP\",\"industry\":\"Specialty food\",\"websiteUrl\":\"https://alpine.example.com\"}")
 [ "$code" = 200 ] || fail "creating business A returned $code: $(cat "$BODY")"
 BIZ_A=$(field 'data.id')
-[ "$(field 'data.automationLevel')" = 'MANUAL' ] || fail 'business should default to automation Level 1'
-pass 'created business A at automation Level 1'
+[ "$(field 'data.onboarded')" = false ] || fail 'a new business should not count as set up'
+[ "$(field 'data.automationMode')" = 'ASK_ME_FIRST' ] || fail 'should default to Ask me first'
+pass 'created business A, not yet set up, defaulting to "Ask me first"'
 
 code=$(post "$JAR_B" /api/businesses \
   "{\"workspaceId\":\"$WS_B\",\"name\":\"Harbour Marine $STAMP\",\"industry\":\"Industrial equipment\"}")
@@ -124,6 +127,46 @@ pass 'cross-tenant write refused as 404'
 [ "$(get "$JAR_B" "/api/businesses?workspaceId=$WS_B")" = 200 ] || fail 'listing B'
 grep -q 'Injected' "$BODY" && fail 'LEAK: cross-tenant write actually landed'
 pass "tenant B's data was not modified"
+
+# --- onboarding: goal, budget, automation ------------------------------------
+code=$(post "$JAR_A" "/api/businesses/$BIZ_A/onboarding" \
+  '{"goal":"SALES","budgetAmountCents":1000,"budgetPeriod":"DAILY","automationMode":"AUTOPILOT"}')
+[ "$code" = 200 ] || fail "onboarding returned $code: $(cat "$BODY")"
+[ "$(field 'data.dailyBudgetCents')" = 1000 ] || fail 'daily budget not derived from stated budget'
+pass 'completed setup: goal, $10/day budget, Autopilot'
+
+# A monthly budget must derive a daily figure that never overspends.
+code=$(post "$JAR_B" /api/businesses \
+  "{\"workspaceId\":\"$WS_B\",\"name\":\"Monthly $STAMP\"}")
+BIZ_B_MONTHLY=$(field 'data.id')
+code=$(post "$JAR_B" "/api/businesses/$BIZ_B_MONTHLY/onboarding" \
+  '{"goal":"AWARENESS","budgetAmountCents":30000,"budgetPeriod":"MONTHLY","automationMode":"ASK_ME_FIRST"}')
+[ "$code" = 200 ] || fail "monthly onboarding returned $code"
+[ "$(field 'data.dailyBudgetCents')" = 967 ] || fail "monthly budget derived wrong daily figure: $(field 'data.dailyBudgetCents')"
+pass '$300/month derived to $9.67/day (rounds down, never over)'
+
+# --- budget above the deployment ceiling is refused, not silently capped ------
+code=$(post "$JAR_A" "/api/businesses/$BIZ_A/onboarding" \
+  '{"goal":"SALES","budgetAmountCents":100000,"budgetPeriod":"DAILY","automationMode":"AUTOPILOT"}')
+[ "$code" = 400 ] || fail "over-ceiling budget should be 400, got $code"
+grep -q 'ceiling' "$BODY" || fail 'refusal does not explain the ceiling'
+pass 'budget above the ceiling refused with an explanation, not capped'
+
+# --- pause everything ---------------------------------------------------------
+code=$(post "$JAR_A" "/api/businesses/$BIZ_A/pause" '{"action":"pause"}')
+[ "$code" = 200 ] || fail "pause returned $code"
+[ "$(field 'data.paused')" = true ] || fail 'pause did not take effect'
+pass 'PAUSE EVERYTHING stops the business'
+
+code=$(post "$JAR_A" "/api/businesses/$BIZ_A/pause" '{"action":"resume"}')
+[ "$code" = 200 ] || fail "resume returned $code"
+[ "$(field 'data.paused')" = false ] || fail 'resume did not take effect'
+pass 'resume restarts it'
+
+# --- pause is tenant-scoped ----------------------------------------------------
+code=$(post "$JAR_B" "/api/businesses/$BIZ_A/pause" '{"action":"pause"}')
+[ "$code" = 404 ] || fail "pausing another tenant's business should be 404, got $code"
+pass "cannot pause another tenant's business"
 
 # --- sign out revokes immediately ----------------------------------------------------------
 [ "$(post "$JAR_A" /api/auth/logout '{}')" = 200 ] || fail 'logout'

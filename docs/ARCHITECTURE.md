@@ -23,9 +23,14 @@ Environment available: Node 22.22, npm 10.9 / pnpm 10.33, PostgreSQL 16, Docker.
 | Tests      | Vitest                                            | Two projects: `unit` (no services) and `db` (real PostgreSQL)                                                                    |
 | Auth       | Database-backed sessions, scrypt                  | Revocation must be immediate; a stateless JWT cannot revoke a creative-approval session                                          |
 
-Deliberately **not** added yet: Redis, a hosted queue, an auth SaaS, a component
-library, an AI SDK. Each would be a dependency carried through ten phases to
-serve one. The abstractions that would let them in later are in place.
+Deliberately **not** added: Redis, a hosted queue, an auth SaaS, a component
+library, an AI SDK, a native image library. Each would be a dependency carried
+through ten phases to serve one, and several would pull in a paid service or a
+build toolchain. The seams that let them in later are in place.
+
+Before any third-party dependency: can this be done locally? Can open source do
+it? Can it be simulated? Is the external service genuinely necessary? Where the
+answer is no, the local implementation wins.
 
 ## 3. Layering
 
@@ -39,8 +44,11 @@ src/server/         All logic that touches the database or an external system.
   api/              The single route wrapper: validation, auth, logging, error mapping
   auth/             Password hashing, sessions, registration and login
   tenancy/          Tenant context and the access guards
-  business/         Business CRUD
-  audit/            The append-only audit trail
+  business/         Business CRUD, onboarding, pause-everything
+  providers/        Registry, the run guard, and the local implementations
+  cost/             Cost ledger, ceilings, hard stops
+  activity/         The owner-facing plain-language feed
+  audit/            The append-only technical audit trail
 
 src/lib/            Pure, dependency-light modules usable from anywhere.
   env.ts            Zod-validated configuration — nothing else reads process.env
@@ -48,6 +56,7 @@ src/lib/            Pure, dependency-light modules usable from anywhere.
   errors.ts         The error taxonomy
   crypto.ts         AES-256-GCM for OAuth tokens at rest
   retry.ts          Bounded exponential backoff with full jitter
+  budget.ts         Stated budget -> derived internal limits. Pure.
   db.ts, id.ts, slug.ts
 
 src/components/     Presentational only. No data access.
@@ -94,20 +103,26 @@ Two further rules:
 
 ## 5. Provider abstractions
 
-Four seams exist so that later phases swap implementations without rewriting
-the engines that call them. The interfaces land with the phase that needs them;
-what matters now is that the boundaries are decided:
+Every capability that could cost money sits behind an interface with at least
+one **local, free implementation**, and nothing calls an implementation
+directly — calls go through `runProvider`, which selects, checks cost ceilings,
+falls back to free, and records the cost.
 
-| Interface                 | Phase | First implementation | Later                     |
-| ------------------------- | ----- | -------------------- | ------------------------- |
-| `AIProvider`              | 3     | Mock, then Anthropic | Any model vendor          |
-| `ImageGenerationProvider` | 4     | Mock                 | Any image service         |
-| `AdvertisingProvider`     | 5 / 6 | Mock, then Meta      | Google, TikTok, Pinterest |
-| `StorageProvider`         | 4     | Local filesystem     | S3-compatible             |
+| Capability       | Free (default)          | Paid alternative             |
+| ---------------- | ----------------------- | ---------------------------- |
+| AI               | `ai.local`              | `ai.anthropic` (Phase 3)     |
+| Image generation | `image.local`           | `image.external` (Phase 4)   |
+| Advertising      | `advertising.simulated` | `advertising.meta` (Phase 6) |
+| Storage          | `storage.local`         | `storage.s3` (Phase 4)       |
 
-The mock implementation is written **first** in every case, and is what the test
-suite runs against. A provider is only ever selected through configuration, so
-no engine imports a vendor SDK.
+Reaching a paid provider requires three independent switches — zero-cost mode
+off, a non-zero cost ceiling, and that provider enabled for the workspace — so
+no single misconfiguration can start a bill. A capability with no free provider
+registered raises at selection time; it would silently break the guarantee that
+the application works with every external service disabled.
+
+The full design, and the tests that hold it in place, are in
+[ZERO-COST.md](ZERO-COST.md).
 
 ## 6. Background jobs
 

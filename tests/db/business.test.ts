@@ -17,10 +17,18 @@ beforeEach(async () => {
 const context = () => requireWorkspaceContext(user, workspace.id);
 
 describe('createBusiness', () => {
-  it('starts every business at the most restrictive automation level', async () => {
-    // §25: default is Level 1 — everything requires approval.
+  it('cannot spend anything until setup is finished', async () => {
+    // A business exists before the owner has stated a goal or a budget. Until
+    // both are set, every spending path has nothing to spend against.
     const business = await createBusiness(await context(), { name: 'Anything Ltd' });
-    expect(business.automationLevel).toBe('MANUAL');
+    expect(business.goal).toBeNull();
+    expect(business.budgetAmountCents).toBeNull();
+    expect(business.budgetPeriod).toBeNull();
+  });
+
+  it('starts on "Ask me first" rather than Autopilot', async () => {
+    const business = await createBusiness(await context(), { name: 'Anything Ltd' });
+    expect(business.automationMode).toBe('ASK_ME_FIRST');
   });
 
   it('inherits the platform spending ceilings', async () => {
