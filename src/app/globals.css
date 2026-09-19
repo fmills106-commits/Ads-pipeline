@@ -1,5 +1,14 @@
 @import 'tailwindcss';
 
+/**
+ * Design tokens.
+ *
+ * `@theme` registers the token names with Tailwind so utilities like
+ * `bg-surface` and `text-ink-muted` exist. It is evaluated at build time and
+ * must stay at the top level — an `@theme` block nested inside a media query
+ * does NOT become conditional, it just overwrites these values unconditionally.
+ * That is why the dark palette below is plain CSS on `:root` instead.
+ */
 @theme {
   --color-canvas: #ffffff;
   --color-surface: #ffffff;
@@ -10,7 +19,7 @@
   --color-accent: #4338ca;
   --color-accent-soft: #eef2ff;
 
-  /* Status palette. Shared by creative/campaign badges so one concept
+  /* Status palette. Shared by creative and campaign badges so one concept
      (needs review, approved, rejected) reads the same everywhere. */
   --color-status-draft: #64748b;
   --color-status-pending: #b45309;
@@ -18,8 +27,9 @@
   --color-status-danger: #b91c1c;
 }
 
+/* Dark palette: the same variables, redefined at runtime. */
 @media (prefers-color-scheme: dark) {
-  @theme {
+  :root {
     --color-canvas: #0b1120;
     --color-surface: #111827;
     --color-surface-muted: #0f172a;
@@ -29,6 +39,7 @@
     --color-accent: #818cf8;
     --color-accent-soft: #1e1b4b;
 
+    /* Lightened so they keep contrast against a dark surface. */
     --color-status-draft: #94a3b8;
     --color-status-pending: #fbbf24;
     --color-status-ok: #4ade80;
