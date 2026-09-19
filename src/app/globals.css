@@ -1,0 +1,56 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-canvas: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-border-subtle: #e2e8f0;
+  --color-ink: #0f172a;
+  --color-ink-muted: #64748b;
+  --color-accent: #4338ca;
+  --color-accent-soft: #eef2ff;
+
+  /* Status palette. Shared by creative/campaign badges so one concept
+     (needs review, approved, rejected) reads the same everywhere. */
+  --color-status-draft: #64748b;
+  --color-status-pending: #b45309;
+  --color-status-ok: #15803d;
+  --color-status-danger: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-canvas: #0b1120;
+    --color-surface: #111827;
+    --color-surface-muted: #0f172a;
+    --color-border-subtle: #1f2937;
+    --color-ink: #e2e8f0;
+    --color-ink-muted: #94a3b8;
+    --color-accent: #818cf8;
+    --color-accent-soft: #1e1b4b;
+
+    --color-status-draft: #94a3b8;
+    --color-status-pending: #fbbf24;
+    --color-status-ok: #4ade80;
+    --color-status-danger: #f87171;
+  }
+}
+
+html,
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+body {
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

@@ -1,0 +1,270 @@
+// =============================================================================
+// AI Advertising Engine — database schema
+// =============================================================================
+// Scope: PHASE 1 only (identity, tenancy, auditing, background jobs).
+//
+// The full target schema — Website, Product, BusinessFact, MarketingStrategy,
+// Offer, Creative, Campaign, Experiment, PerformanceSnapshot and the rest — is
+// specified in docs/SCHEMA.md and lands phase by phase. Tables are added when
+// the code that reads and writes them is added, so that every migration ships
+// with the behaviour that justifies it.
+//
+// Conventions
+//  - Every tenant-scoped table carries `businessId` (or `workspaceId` one level
+//    up) as a non-null FK, indexed. Isolation is enforced in the data-access
+//    layer (src/server/tenancy) and asserted by tests in tests/db.
+//  - Money is stored in integer minor units (cents) with an ISO-4217 currency
+//    code. No floats anywhere near a budget.
+//  - Deletes cascade down the ownership tree; nothing tenant-scoped is orphaned.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Identity
+// -----------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  /// scrypt-derived; see src/server/auth/password.ts for the encoded format.
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions    Session[]
+  memberships WorkspaceMembership[]
+  auditLogs   AuditLog[]
+
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Session {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// SHA-256 of the session token, keyed with AUTH_SECRET. The raw token lives
+  /// only in the user's cookie — a database dump does not yield live sessions.
+  tokenHash String   @unique
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  /// Recorded for the security audit trail, not for tracking.
+  ipAddress String?
+  userAgent String?
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// -----------------------------------------------------------------------------
+// Tenancy
+// -----------------------------------------------------------------------------
+
+/// The billing and ownership boundary. A workspace owns many businesses; a user
+/// may belong to several workspaces.
+model Workspace {
+  id        String   @id @default(uuid()) @db.Uuid
+  /// Human-readable, URL-safe, globally unique.
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships WorkspaceMembership[]
+  businesses  Business[]
+  auditLogs   AuditLog[]
+  jobs        Job[]
+
+  @@map("workspaces")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model WorkspaceMembership {
+  id          String        @id @default(uuid()) @db.Uuid
+  userId      String        @db.Uuid
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String        @db.Uuid
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now())
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+  @@map("workspace_memberships")
+}
+
+/// How much the platform may do without a human pressing the button.
+/// Defaults to the most restrictive level; raising it is an explicit,
+/// audited choice by the merchant.
+enum AutomationLevel {
+  /// L1 — everything requires approval.
+  MANUAL
+  /// L2 — creative generation is automatic; publishing requires approval.
+  ASSISTED
+  /// L3 — campaign creation is automatic within spending limits.
+  SUPERVISED
+  /// L4 — fully automated within merchant-defined rules.
+  AUTONOMOUS
+}
+
+/// One advertised business. This is the tenant boundary for all campaign data:
+/// knowledge, creatives, campaigns and learning never cross it.
+model Business {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  name        String
+  /// Free text, not an enum: the platform must accept industries nobody
+  /// anticipated when this table was written.
+  industry    String?
+  websiteUrl  String?
+  description String?
+  /// ISO 4217. All money on this business is denominated in it.
+  currency    String  @default("USD")
+  /// IANA timezone, used for scheduling and for day-boundary reporting.
+  timezone    String  @default("UTC")
+
+  automationLevel AutomationLevel @default(MANUAL)
+
+  /// Per-business spending ceilings, in minor units. Always intersected with
+  /// the platform-wide ceilings from env; the lower of the two wins.
+  maxDailyBudgetCents          Int @default(2000)
+  maxCampaignBudgetCents       Int @default(10000)
+  budgetApprovalThresholdCents Int @default(5000)
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  auditLogs AuditLog[]
+  jobs      Job[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@index([workspaceId, archivedAt])
+  @@map("businesses")
+}
+
+// -----------------------------------------------------------------------------
+// Auditing
+// -----------------------------------------------------------------------------
+
+/// Who did what, and whether "who" was a person or the AI. Append-only:
+/// nothing in the application updates or deletes these rows.
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  businessId  String?   @db.Uuid
+  business    Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  actorType AuditActorType
+  /// Null when the actor is the system or the AI.
+  actorId   String?        @db.Uuid
+  actor     User?          @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  /// Dotted verb, e.g. `business.created`, `campaign.launched`.
+  action     String
+  /// The model name of the affected record, e.g. `Business`.
+  objectType String?
+  objectId   String?
+
+  /// Prior and resulting state for the fields that changed. Redacted before write.
+  previousValue Json?
+  newValue      Json?
+  metadata      Json?
+
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([businessId, createdAt])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+enum AuditActorType {
+  USER
+  SYSTEM
+  AI
+}
+
+// -----------------------------------------------------------------------------
+// Background jobs
+// -----------------------------------------------------------------------------
+// A database-backed queue. Postgres `FOR UPDATE SKIP LOCKED` gives safe
+// multi-worker claiming without adding Redis to the deployment story. If
+// throughput ever outgrows this, the queue interface is narrow enough to
+// swap behind.
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  /// Retries exhausted; retained for inspection, never re-run automatically.
+  DEAD
+  CANCELLED
+}
+
+model Job {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// e.g. `website.scan`, `creative.generate`. Values in src/server/jobs/types.ts.
+  type String
+
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  businessId  String?   @db.Uuid
+  business    Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  status   JobStatus @default(PENDING)
+  /// Higher runs first.
+  priority Int       @default(0)
+
+  payload Json
+  result  Json?
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(3)
+
+  /// Earliest time this job may be claimed. Backoff sets it forward.
+  runAt       DateTime  @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  lastError Json?
+
+  /// Caller-supplied key that makes enqueueing idempotent — re-enqueuing the
+  /// same logical work (a webhook redelivery, a double-clicked button) returns
+  /// the existing job instead of duplicating it.
+  idempotencyKey String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, runAt, priority])
+  @@index([workspaceId, createdAt])
+  @@index([businessId, type, createdAt])
+  @@map("jobs")
+}
