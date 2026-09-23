@@ -110,7 +110,7 @@ export default async function WebsitePage() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Figure label="Pages read" value={String(status.pagesFetched)} />
             <Figure label="Products found" value={String(knowledge.products.length)} />
-            <Figure label="Verified facts" value={String(knowledge.facts.length)} />
+            <Figure label="Verified facts" value={String(knowledge.factCount)} />
             <Figure
               label="Last read"
               value={
@@ -158,6 +158,8 @@ export default async function WebsitePage() {
                               </span>
                             ) : null}
                           </p>
+                          <StatedOffers offers={product.statedOffers} />
+
                           <a
                             href={product.productUrl}
                             target="_blank"
@@ -289,6 +291,43 @@ function AvailabilityBadge({ availability }: { availability: string }) {
     >
       {inStock ? 'In stock' : availability === 'PREORDER' ? 'Pre-order' : 'Out of stock'}
     </span>
+  );
+}
+
+/**
+ * Promotions the page states in so many words.
+ *
+ * Shown in the site's own words rather than normalised to "15% off", because
+ * a discount the owner does not recognise is how they find out a page still
+ * carries last month's sale. Nothing here is computed: `sourceText` is the
+ * phrase the extractor matched, quoted back.
+ */
+function StatedOffers({ offers }: { offers: unknown }) {
+  if (!Array.isArray(offers) || offers.length === 0) return null;
+
+  const texts = offers
+    .map((offer) =>
+      typeof offer === 'object' && offer !== null && 'sourceText' in offer
+        ? String((offer as { sourceText: unknown }).sourceText)
+        : null,
+    )
+    .filter((text): text is string => text !== null && text.length > 0)
+    .slice(0, 3);
+
+  if (texts.length === 0) return null;
+
+  return (
+    <p className="mt-1 flex flex-wrap items-center gap-2">
+      {texts.map((text) => (
+        <span
+          key={text}
+          className="rounded-full bg-accent/10 px-2 py-0.5 text-xs text-accent"
+          title="This wording appears on your page"
+        >
+          “{text}”
+        </span>
+      ))}
+    </p>
   );
 }
 

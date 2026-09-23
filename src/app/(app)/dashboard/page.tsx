@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { Card, EmptyState } from '@/components/ui/primitives';
+import { Card, cx, EmptyState } from '@/components/ui/primitives';
 import { requireCurrentUser } from '@/server/auth/current-user';
 import {
   listWorkspacesForUser,
@@ -13,6 +13,7 @@ import { pendingAttentionCount, recentActivity } from '@/server/activity/feed';
 import { costSummary } from '@/server/cost/ledger';
 import { formatBudget, formatCents } from '@/lib/budget';
 import { isZeroCostMode } from '@/lib/env';
+import { getScanStatus } from '@/server/scanner/service';
 import { PauseControl } from './pause-control';
 import { ActivityFeed } from './activity-feed';
 
@@ -79,10 +80,11 @@ export default async function DashboardPage() {
   }
 
   const businessContext = await requireBusinessContext(user, business.id);
-  const [activity, attention, costs] = await Promise.all([
+  const [activity, attention, costs, scan] = await Promise.all([
     recentActivity(businessContext, 12),
     pendingAttentionCount(businessContext),
     costSummary(active.workspace.id),
+    getScanStatus(businessContext),
   ]);
 
   const paused = business.pausedAt !== null;
@@ -94,6 +96,12 @@ export default async function DashboardPage() {
   // shown as "not yet" rather than as zeros, because a confident "$0.00 spent"
   // and "we have not started spending" are different statements.
   const hasPerformanceData = false;
+
+  // What this page says about progress is read from the scan, not hard-coded to
+  // the phase being built. An earlier version said "website scanning arrives
+  // next" regardless, which contradicted the activity feed beside it once the
+  // scanner shipped.
+  const stage = describeStage(scan?.phase ?? 'idle', business.websiteUrl);
 
   return (
     <>
@@ -149,9 +157,9 @@ export default async function DashboardPage() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label="Advertising"
-          value={paused ? 'Paused' : 'Getting ready'}
-          tone={paused ? 'danger' : 'ok'}
-          note={paused ? 'You paused it' : 'Website scanning arrives next'}
+          value={paused ? 'Paused' : stage.value}
+          tone={paused ? 'danger' : stage.tone}
+          note={paused ? 'You paused it' : stage.note}
         />
         <Stat label="Spend" value={hasPerformanceData ? '—' : 'Not yet'} note="Nothing spent" />
         <Stat label="Sales" value={hasPerformanceData ? '—' : 'Not yet'} />
@@ -166,10 +174,7 @@ export default async function DashboardPage() {
 
         <Card className="h-fit">
           <h2 className="mb-1 text-sm font-semibold">What happens next</h2>
-          <p className="text-sm text-ink-muted">
-            Website scanning and product discovery are the next thing being built. Once they land,
-            this page starts filling in on its own — you won&rsquo;t need to do anything.
-          </p>
+          <p className="text-sm text-ink-muted">{stage.next}</p>
           <dl className="mt-4 space-y-2 border-t border-border-subtle pt-4 text-sm">
             <div className="flex justify-between gap-3">
               <dt className="text-ink-muted">Website</dt>
@@ -188,6 +193,66 @@ export default async function DashboardPage() {
   );
 }
 
+interface Stage {
+  value: string;
+  note: string;
+  tone: 'ok' | 'pending' | 'danger';
+  next: string;
+}
+
+/**
+ * Where this business has actually got to, in the owner's terms.
+ *
+ * Each branch says what is true now and what the owner should expect, without
+ * promising a date. "Ad creation is being built" is honest; "your ads go live
+ * tomorrow" would not be.
+ */
+function describeStage(phase: string, websiteUrl: string | null): Stage {
+  if (websiteUrl === null) {
+    return {
+      value: 'Needs your website',
+      note: 'Add it in Settings',
+      tone: 'pending',
+      next: 'Add your website address in Settings and we will read it to learn what you sell.',
+    };
+  }
+
+  switch (phase) {
+    case 'crawling':
+    case 'queued':
+      return {
+        value: 'Reading your site',
+        note: 'This takes a minute or two',
+        tone: 'pending',
+        next: 'We are going through your pages now. When it finishes you will see your products on the Website page.',
+      };
+
+    case 'failed':
+      return {
+        value: 'Needs your attention',
+        note: 'We could not read your site',
+        tone: 'danger',
+        next: 'We could not read your website. Check the address in Settings, then try again from the Website page.',
+      };
+
+    case 'done':
+      return {
+        value: 'Site read',
+        note: 'Ad creation arrives next',
+        tone: 'ok',
+        next: 'We know what you sell. Writing ads and making images is the next thing being built — once it lands, this page fills in on its own.',
+      };
+
+    default:
+      return {
+        value: 'Ready to start',
+        note: 'We have not read your site yet',
+        tone: 'pending',
+        next: 'Open the Website page and press “Read my website”. We will go through your pages and find your products.',
+      };
+  }
+}
+
 function Stat({
   label,
   value,
@@ -197,21 +262,23 @@ function Stat({
   label: string;
   value: string;
   note?: string;
-  tone?: 'ok' | 'danger';
+  tone?: 'ok' | 'pending' | 'danger';
 }) {
+  const colour =
+    tone === 'ok'
+      ? 'text-status-ok'
+      : tone === 'danger'
+        ? 'text-status-danger'
+        : tone === 'pending'
+          ? 'text-status-pending'
+          : 'tabular-nums';
+  const dot = tone === 'ok' ? '🟢 ' : tone === 'danger' ? '🔴 ' : tone === 'pending' ? '🟡 ' : '';
+
   return (
     <Card className="p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">{label}</p>
-      <p
-        className={
-          tone === 'ok'
-            ? 'mt-2 text-xl font-semibold text-status-ok'
-            : tone === 'danger'
-              ? 'mt-2 text-xl font-semibold text-status-danger'
-              : 'mt-2 text-xl font-semibold tabular-nums'
-        }
-      >
-        {tone === 'ok' ? '🟢 ' : tone === 'danger' ? '🔴 ' : ''}
+      <p className={cx('mt-2 text-xl font-semibold', colour)}>
+        {dot}
         {value}
       </p>
       {note ? <p className="mt-1 text-xs text-ink-muted">{note}</p> : null}

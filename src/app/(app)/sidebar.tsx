@@ -19,16 +19,29 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
 
+  /**
+   * One element, two shapes. Below `md` it is a top bar with a horizontally
+   * scrollable nav, because a 240px rail on a 390px screen leaves no room for
+   * the content it is meant to navigate. From `md` up it is the usual left
+   * rail. No JavaScript drawer: a five-item nav does not need one.
+   */
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-border-subtle bg-surface-muted">
-      <div className="border-b border-border-subtle px-5 py-5">
-        <p className="text-xs font-semibold uppercase tracking-widest text-accent">Ads Engine</p>
-        <p className="mt-1 truncate text-sm font-medium" title={workspaceName}>
-          {workspaceName}
-        </p>
+    <aside className="flex shrink-0 flex-col border-b border-border-subtle bg-surface-muted md:w-60 md:border-b-0 md:border-r">
+      <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-5 py-4 md:block md:py-5">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-widest text-accent">Ads Engine</p>
+          <p className="mt-1 truncate text-sm font-medium" title={workspaceName}>
+            {workspaceName}
+          </p>
+        </div>
+        {/* On a phone the footer block below is hidden, so sign-out lives here. */}
+        <div className="shrink-0 md:hidden">{logout}</div>
       </div>
 
-      <nav className="flex-1 space-y-0.5 overflow-y-auto p-3" aria-label="Primary">
+      <nav
+        className="flex gap-1 overflow-x-auto p-3 md:flex-1 md:flex-col md:gap-0.5 md:overflow-x-visible md:overflow-y-auto"
+        aria-label="Primary"
+      >
         {NAV_ITEMS.map((item) => {
           const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
 
@@ -36,7 +49,7 @@ export function Sidebar({
             return (
               <span
                 key={item.href}
-                className="flex cursor-not-allowed items-center justify-between rounded-md px-3 py-2 text-sm text-ink-muted opacity-60"
+                className="flex shrink-0 cursor-not-allowed items-center gap-2 whitespace-nowrap rounded-md px-3 py-2 text-sm text-ink-muted opacity-60 md:justify-between"
                 title={`Arrives in Phase ${item.phase}`}
                 aria-disabled="true"
               >
@@ -52,7 +65,7 @@ export function Sidebar({
               href={item.href}
               aria-current={active ? 'page' : undefined}
               className={cx(
-                'block rounded-md px-3 py-2 text-sm transition',
+                'shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm transition',
                 active
                   ? 'bg-accent-soft font-medium text-accent'
                   : 'text-ink hover:bg-surface hover:text-accent',
@@ -64,7 +77,7 @@ export function Sidebar({
         })}
       </nav>
 
-      <div className="border-t border-border-subtle p-4">
+      <div className="hidden border-t border-border-subtle p-4 md:block">
         <p className="truncate text-sm font-medium" title={userName}>
           {userName}
         </p>

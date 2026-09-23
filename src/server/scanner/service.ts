@@ -198,11 +198,12 @@ export async function getWebsiteKnowledge(context: BusinessContext, db: Db = pri
       pages: [],
       products: [],
       facts: [],
+      factCount: 0,
       pageTypeCounts: {} as Record<string, number>,
     };
   }
 
-  const [pages, products, facts, grouped] = await Promise.all([
+  const [pages, products, facts, grouped, businessFactCount, productFactCount] = await Promise.all([
     db.websitePage.findMany({
       where: { websiteId: website.id },
       orderBy: [{ pageType: 'asc' }, { fetchedAt: 'desc' }],
@@ -225,6 +226,10 @@ export async function getWebsiteKnowledge(context: BusinessContext, db: Db = pri
         _count: { select: { versions: true } },
       },
     }),
+    // `facts` is the business-level list the page renders, so it is capped.
+    // The headline count below is counted, not measured from this array —
+    // showing `facts.length` would silently stop at the cap and would leave
+    // out product facts entirely.
     db.businessFact.findMany({
       where: { businessId: context.businessId },
       orderBy: [{ confidence: 'desc' }, { key: 'asc' }],
@@ -235,12 +240,22 @@ export async function getWebsiteKnowledge(context: BusinessContext, db: Db = pri
       where: { websiteId: website.id },
       _count: { _all: true },
     }),
+    db.businessFact.count({ where: { businessId: context.businessId } }),
+    db.productFact.count({ where: { product: { businessId: context.businessId } } }),
   ]);
 
   const pageTypeCounts: Record<string, number> = {};
   for (const row of grouped) pageTypeCounts[row.pageType] = row._count._all;
 
-  return { website, pages, products, facts, pageTypeCounts };
+  return {
+    website,
+    pages,
+    products,
+    facts,
+    /** Every verified fact held for this business, business-level and per-product. */
+    factCount: businessFactCount + productFactCount,
+    pageTypeCounts,
+  };
 }
 
 /** Marks a scan failed, for the job handler's error path. */
