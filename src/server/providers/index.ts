@@ -8,6 +8,7 @@ import {
   createSimulatedAdvertisingProvider,
   simulatedAdvertisingDescriptor,
 } from './local/advertising';
+import { createLocalWebFetchProvider, localWebFetchDescriptor } from './local/web-fetch';
 import type { Provider } from './types';
 
 /**
@@ -48,6 +49,7 @@ export function registerAllProviders(): void {
   registerProvider(localImageDescriptor, createLocalImageProvider);
   registerProvider(localStorageDescriptor, createLocalStorageProvider);
   registerProvider(simulatedAdvertisingDescriptor, createSimulatedAdvertisingProvider);
+  registerProvider(localWebFetchDescriptor, createLocalWebFetchProvider);
 
   // --- Paid alternatives: declared, configured-or-not, never on by default --
   registerProvider(
@@ -90,6 +92,23 @@ export function registerAllProviders(): void {
       isConfigured: () => externalCredentials().s3,
     },
     notYetImplemented('storage.s3', 4),
+  );
+
+  registerProvider(
+    {
+      key: 'webfetch.external',
+      capability: 'WEB_FETCH',
+      tier: 'EXTERNAL_PAID',
+      label: 'Managed fetching service (paid)',
+      description:
+        'For sites that block direct automated access. Billed per request. The free direct fetch handles most websites.',
+      priority: 10,
+      // No credential variable exists for this yet, so it can never be
+      // selected — it is listed so Settings can be honest that the option
+      // exists and is off.
+      isConfigured: () => false,
+    },
+    notYetImplemented('webfetch.external', 2),
   );
 
   registerProvider(

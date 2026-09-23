@@ -27,13 +27,20 @@ See [docs/ZERO-COST.md](docs/ZERO-COST.md).
 
 ## Status
 
-**Phase 1 complete and verified**, plus the zero-cost provider architecture and
-the simplified interface. See [docs/PHASES.md](docs/PHASES.md) for the plan and
-[docs/PHASE-1.md](docs/PHASE-1.md) for what was built and tested.
+**Phases 1 and 2 complete and verified** — the foundation, the zero-cost
+provider architecture, the simplified interface, and the website scanner. See
+[docs/PHASES.md](docs/PHASES.md) for the plan, and the
+[Phase 1](docs/PHASE-1.md) and [Phase 2](docs/PHASE-2.md) reports for what was
+built and tested.
 
-Website scanning, the AI marketing engine, creative generation and Meta
-integration arrive in Phases 2–6. The seams they plug into exist now, each with
-its free implementation already in place.
+Point it at a website today and it will read the pages, find the products, and
+record the prices, offers and contact details — each fact carrying the URL it
+came from and how it was extracted. It has not yet been run against a live
+merchant site; that is Phase 2's one outstanding exit criterion.
+
+The AI marketing engine, creative generation and Meta integration arrive in
+Phases 3–6. The seams they plug into exist now, each with its free
+implementation already in place.
 
 ## Quick start
 
@@ -44,6 +51,7 @@ npm install
 cp .env.example .env          # fill in the two generated secrets it names
 npm run db:migrate
 npm run dev                   # http://localhost:3000
+npm run worker                # optional: background jobs in their own process
 ```
 
 ```bash
@@ -52,7 +60,9 @@ openssl rand -base64 32       # ENCRYPTION_KEY
 ```
 
 That is the whole setup. Register, answer four questions, and the dashboard is
-live — running entirely on local providers.
+live — running entirely on local providers. The worker is optional in
+development: the dev server drains the queue in-process, so pressing "Read my
+website" works without it.
 
 ## Verification
 
@@ -68,14 +78,15 @@ paid service.
 
 ## Documentation
 
-| Document                                     | Contents                                                       |
-| -------------------------------------------- | -------------------------------------------------------------- |
-| [docs/ZERO-COST.md](docs/ZERO-COST.md)       | How $0 operation is enforced rather than promised              |
-| [docs/UX.md](docs/UX.md)                     | The four-question setup, three automation modes, activity feed |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layering, tenancy, providers, security posture                 |
-| [docs/SCHEMA.md](docs/SCHEMA.md)             | Full target database schema, phase by phase                    |
-| [docs/PHASES.md](docs/PHASES.md)             | The ten-phase plan and the definition of done                  |
-| [docs/PHASE-1.md](docs/PHASE-1.md)           | Phase 1 report: built, verified, and what remains              |
+| Document                                     | Contents                                                          |
+| -------------------------------------------- | ----------------------------------------------------------------- |
+| [docs/ZERO-COST.md](docs/ZERO-COST.md)       | How $0 operation is enforced rather than promised                 |
+| [docs/UX.md](docs/UX.md)                     | The four-question setup, three automation modes, activity feed    |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layering, tenancy, providers, security posture                    |
+| [docs/SCHEMA.md](docs/SCHEMA.md)             | Full target database schema, phase by phase                       |
+| [docs/PHASES.md](docs/PHASES.md)             | The ten-phase plan and the definition of done                     |
+| [docs/PHASE-1.md](docs/PHASE-1.md)           | Phase 1 report: built, verified, and what remains                 |
+| [docs/PHASE-2.md](docs/PHASE-2.md)           | Phase 2 report: the website scanner, and the SSRF bypass it fixed |
 
 ## What is structural, not advisory
 
@@ -90,9 +101,18 @@ cross-tenant reference returns 404, never 403: confirming a record exists in
 someone else's workspace is itself a leak.
 
 **Truth.** Verified facts scraped from a merchant's own site and AI inferences
-are separate tables with separate UI treatment. Simulated campaigns and
+are separate tables with separate UI treatment. A fact row cannot be written
+without the URL it came from — the column is non-null. Simulated campaigns and
 simulated metrics carry `isReal: false` in the return type, not as a
-convention. An AI hypothesis is never rendered as a business fact.
+convention. An AI hypothesis is never rendered as a business fact. Where the
+scanner cannot tell (`1,299` — twelve hundred, or one and a bit?) it records
+nothing rather than guessing.
+
+**Fetching.** The scanner's job is to fetch URLs strangers supply, so every URL
+passes two gates: one on the address as written, one on the address DNS
+actually resolved to, both re-run on every redirect hop. The only exemption is
+a function argument with no configuration path, so no deployment can switch the
+guard off.
 
 **Stopping.** One button pauses everything, with no confirmation dialog in the
 way. The flag lives on the business, so it stops work that has not been created

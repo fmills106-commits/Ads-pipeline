@@ -85,6 +85,40 @@ export interface ProviderResult<T> {
 // place. Implementations land with the phase that needs them; each capability
 // gets its local, free implementation first.
 
+/**
+ * Fetching a public web page.
+ *
+ * Behind a provider because a site protected by bot mitigation may eventually
+ * need a paid fetching service — and when that day comes, the scanner should
+ * not change. The free implementation is plain HTTP and is always available.
+ */
+export interface WebFetchProvider extends Provider {
+  fetch(request: WebFetchRequest): Promise<ProviderResult<FetchedResource>>;
+}
+
+export interface WebFetchRequest {
+  url: string;
+  method?: 'GET' | 'HEAD';
+  timeoutMs?: number;
+  maxBytes?: number;
+}
+
+export interface FetchedResource {
+  /** The normalised URL that was requested. */
+  url: string;
+  /** Where it ended up after redirects. */
+  finalUrl: string;
+  status: number;
+  contentType: string | null;
+  body: string;
+  bytes: number;
+  /** True when the byte ceiling cut the body short. */
+  truncated: boolean;
+  redirectChain: string[];
+  /** Set when the body was deliberately not read. */
+  skippedReason?: 'unsupported-content-type' | 'too-large';
+}
+
 export interface AIProvider extends Provider {
   /**
    * Produces structured output conforming to the caller's schema.

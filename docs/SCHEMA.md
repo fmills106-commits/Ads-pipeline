@@ -9,7 +9,9 @@ its place.
 
 **Migrated so far:** `users`, `sessions`, `workspaces`,
 `workspace_memberships`, `businesses`, `audit_logs`, `jobs`,
-`provider_settings`, `cost_records`, `activity_events`.
+`provider_settings`, `cost_records`, `activity_events`, `websites`,
+`scan_runs`, `website_pages`, `products`, `product_images`,
+`product_versions`, `business_facts`, `product_facts`.
 
 ---
 
@@ -122,55 +124,126 @@ in the audit log belongs here.
 
 ---
 
-## Phase 2 — website knowledge
+## Phase 2 — website knowledge ✅ migrated
+
+Migration `20260921180742_phase2_website_scanner`. Eight tables, plus
+`WEB_FETCH` added to the `ProviderCapability` and `CostKind` enums.
 
 ### `websites`
 
-`id`, `businessId`, `rootUrl`, `sitemapUrl?`, `robotsTxt?`, `lastScannedAt`,
-`scanStatus`, `platformHint` (Shopify / WooCommerce / unknown — a hint for
-extraction strategy, never a hard-coded assumption).
+One per `(businessId, rootUrl)`. `rootUrl` (normalised origin),
+`resolvedRootUrl?` (where the crawl actually landed after redirects),
+`robotsTxt?` + `robotsFetchedAt?` (kept raw, so a decision to skip a page is
+auditable afterwards), `sitemapUrls[]`, `platformHint?` (Shopify /
+WooCommerce / unknown — used only to _order_ extraction strategies, never to
+skip one), `lastScanAt?`, `lastScanRunId?`.
+
+### `scan_runs`
+
+One row per scan **attempt**, append-only: a rescan inserts rather than
+mutating, which is what makes change detection possible.
+
+`status` (`QUEUED|RUNNING|COMPLETED|PARTIAL|FAILED|CANCELLED`),
+`requestedUrl`, `jobId?`, `startedAt?`, `finishedAt?`, counters
+(`pagesFetched`, `pagesSkipped`, `bytesFetched`, `productsFound`,
+`factsExtracted`), `stopReason?`, `warnings?`, `error?`, `changeSummary?`.
+
+`PARTIAL` means a limit was hit before the site was exhausted — the data is
+accurate, there is simply more of it. `stopReason = 'unreachable'` is the
+opposite case: nothing could be read at all, so the run is `FAILED` and the
+owner is told why. A scan that fetched zero pages is never `COMPLETED`.
 
 ### `website_pages`
 
-`id`, `businessId`, `websiteId`, `url`, `pageType`
+Unique on `(websiteId, url)` — the normalised URL is the dedup key. `finalUrl?`,
+`pageType`
 (`HOME|PRODUCT|COLLECTION|ABOUT|FAQ|SHIPPING|RETURNS|CONTACT|POLICY|BLOG|OTHER`),
-`title`, `rawHtmlRef` (object-storage key, not inline), `extractedText`,
-`structuredData` (JSON-LD / OpenGraph), `contentHash`, `httpStatus`,
-`fetchedAt`.
+`httpStatus`, `title?`, `metaDescription?`, `extractedText?`,
+`structuredData?` (JSON-LD, OpenGraph and microdata as found), `contentHash`,
+`outboundLinkCount`, `fetchedAt`, `firstSeenAt`.
 
-`contentHash` is what makes rescans cheap and change detection exact.
+`extractedText` is **untrusted third-party content**. It is stored, shown with
+provenance, and from Phase 3 passed to models as delimited data — never as
+instruction.
+
+`contentHash` (SHA-256 of normalised text + structured data) is what makes
+rescans cheap and change detection exact: an unchanged hash means nothing to
+re-extract.
+
+Raw HTML is deliberately **not** stored. It is large, it is the least useful
+form of the content, and keeping it would mean holding megabytes of somebody
+else's markup per scan for no downstream reader.
 
 ### `products`
 
-`id`, `businessId`, `websiteId`, `externalId?`, `name`, `description`,
-`priceCents`, `originalPriceCents?`, `costCents?` (merchant-supplied only —
-**never inferred**), `currency`, `availability`, `productUrl`, `category`,
-`tags`, `contentHash`, `firstSeenAt`, `lastSeenAt`, `removedAt?`.
+Unique on `(websiteId, productUrl)` — the product page URL is the natural key.
+`externalId?` (SKU/MPN/id when the page exposes one), `name`, `description?`,
+`priceCents?`, `comparePriceCents?` (a "was" price, only when the page states
+one), `currency?`, `costCents?` (**merchant-supplied only, never inferred**),
+`availability` (`IN_STOCK|OUT_OF_STOCK|PREORDER|UNKNOWN`), `category?`,
+`brand?`, `sku?`, `tags[]`, `statedOffers?`, `callsToAction[]`, `contentHash`,
+`firstSeenAt`, `lastSeenAt`, `removedAt?`.
 
-### `product_versions`
+`statedOffers` holds only what a page says in so many words ("20% off",
+"free shipping over $50"). Nothing is computed into an offer here; that is
+Phase 3's job, and it starts from these literal statements.
 
-Every change to a product creates a row here rather than overwriting.
-`id`, `businessId`, `productId`, `snapshot` (JSON), `changedFields`,
-`detectedAt`. This is what §48/§49 require: a price moving from $9.99 to $11.99
-preserves the old value and flags campaigns carrying outdated information.
-
-### `product_variants`
-
-`id`, `businessId`, `productId`, `sku?`, `name`, `priceCents`, `availability`,
-`attributes` (JSON).
+`removedAt` rather than a delete: campaigns may still reference the product,
+and "never advertise an unavailable product" needs to know it went away.
 
 ### `product_images`
 
-`id`, `businessId`, `productId`, `sourceUrl`, `storageKey`, `width`, `height`,
-`isPrimary`, `altText?`.
+`sourceUrl` (unique per product), `altText?`, `width?`, `height?`,
+`isPrimary`, `position`, `storageKey?`.
+
+`storageKey` stays null in Phase 2 — the source URL is recorded, the bytes are
+not downloaded. Copying every image into storage is bandwidth the scan does
+not need to spend; Phase 4 fetches the ones a creative actually uses.
+
+### `product_versions`
+
+Every observed change inserts a row rather than overwriting.
+`versionNumber` (monotonic per product, starting at 1), `snapshot` (JSON),
+`changedFields[]` (empty on version 1), `scanRunId?`, `detectedAt`.
+
+A price moving from $9.99 to $11.99 preserves the old value, so a campaign
+carrying the outdated one can be flagged.
 
 ### `business_facts` / `product_facts`
 
-The provenance layer. `id`, `businessId`, `productId?`, `key`, `value`,
-`sourceUrl`, `sourceExcerpt`, `confidence` (0–1), `extractionMethod`
-(`JSON_LD|OPENGRAPH|HTML|TEXT|MERCHANT_PROVIDED`), `verifiedAt`.
+The provenance layer, and the reason this phase exists. `key` (dotted, e.g.
+`business.name`, `contact.email`), `value`, `sourceUrl`, `sourceExcerpt?`,
+`method`, `confidence` (0–1), `scanRunId?`, `firstSeenAt`, `lastSeenAt`.
 
-Separate from anything AI-generated. A row here is traceable to a URL.
+`sourceUrl` and `method` are **not nullable**: a fact without a source is not
+a fact, and there is no code path that writes one.
+
+`method` is the `ExtractionMethod` enum, ordered by how much it can be
+trusted:
+
+| Method              | Meaning                                     |
+| ------------------- | ------------------------------------------- |
+| `JSON_LD`           | schema.org JSON-LD — published deliberately |
+| `OPENGRAPH`         | OpenGraph / Twitter card meta tags          |
+| `MICRODATA`         | HTML microdata / RDFa attributes            |
+| `HTML`              | Ordinary elements (`<title>`, `<h1>`, …)    |
+| `TEXT_PATTERN`      | Pattern-matched from visible text — lowest  |
+| `MERCHANT_PROVIDED` | Typed in by the merchant inside this app    |
+
+Confidence is derived from the method and from corroboration across pages,
+never invented. Where two strategies disagree, the higher-confidence one wins
+and the loser is discarded rather than averaged.
+
+Deliberately a different table from anything AI-generated (Phase 3's
+`ai_inferences`). The UI renders the two differently, and there is no
+operation that promotes an inference into these tables.
+
+### Not built: `product_variants`
+
+Planned in the Phase 1 draft of this document and deliberately left out. No
+extraction path produces variants yet — a size or colour list on a product
+page is not reliably machine-readable, and an empty table would imply it was.
+Variants land when something needs them, with the extractor that fills them.
 
 ---
 

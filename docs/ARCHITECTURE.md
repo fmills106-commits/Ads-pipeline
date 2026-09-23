@@ -49,6 +49,8 @@ src/server/         All logic that touches the database or an external system.
   cost/             Cost ledger, ceilings, hard stops
   activity/         The owner-facing plain-language feed
   audit/            The append-only technical audit trail
+  jobs/             The queue (claim, retry, dead-letter) and the worker loop
+  scanner/          Crawl, extract, persist — the website scanner
 
 src/lib/            Pure, dependency-light modules usable from anywhere.
   env.ts            Zod-validated configuration — nothing else reads process.env
@@ -57,6 +59,7 @@ src/lib/            Pure, dependency-light modules usable from anywhere.
   crypto.ts         AES-256-GCM for OAuth tokens at rest
   retry.ts          Bounded exponential backoff with full jitter
   budget.ts         Stated budget -> derived internal limits. Pure.
+  net-safety.ts     URL/IP classification and both SSRF gates. Pure.
   db.ts, id.ts, slug.ts
 
 src/components/     Presentational only. No data access.
@@ -108,12 +111,13 @@ one **local, free implementation**, and nothing calls an implementation
 directly — calls go through `runProvider`, which selects, checks cost ceilings,
 falls back to free, and records the cost.
 
-| Capability       | Free (default)          | Paid alternative             |
-| ---------------- | ----------------------- | ---------------------------- |
-| AI               | `ai.local`              | `ai.anthropic` (Phase 3)     |
-| Image generation | `image.local`           | `image.external` (Phase 4)   |
-| Advertising      | `advertising.simulated` | `advertising.meta` (Phase 6) |
-| Storage          | `storage.local`         | `storage.s3` (Phase 4)       |
+| Capability       | Free (default)          | Paid alternative                   |
+| ---------------- | ----------------------- | ---------------------------------- |
+| Web fetch        | `webfetch.local`        | a scraping service, if ever needed |
+| AI               | `ai.local`              | `ai.anthropic` (Phase 3)           |
+| Image generation | `image.local`           | `image.external` (Phase 4)         |
+| Advertising      | `advertising.simulated` | `advertising.meta` (Phase 6)       |
+| Storage          | `storage.local`         | `storage.s3` (Phase 4)             |
 
 Reaching a paid provider requires three independent switches — zero-cost mode
 off, a non-zero cost ceiling, and that provider enabled for the workspace — so
@@ -128,6 +132,8 @@ The full design, and the tests that hold it in place, are in
 
 Long work — crawling, image generation, campaign sync, learning analysis — runs
 as rows in the `jobs` table, claimed with `SELECT … FOR UPDATE SKIP LOCKED`.
+The table shipped in Phase 1; the queue and worker that drive it shipped in
+Phase 2 with the website scan, its first job type.
 
 Each job carries `attempts`, `maxAttempts`, `runAt`, `lastError`, and an
 optional unique `idempotencyKey` so a webhook redelivery or a double-clicked
@@ -137,9 +143,47 @@ does not retry together. `maxAttempts` is a required parameter, which makes
 "retry forever" inexpressible.
 
 Jobs are tenant-scoped (`workspaceId`, optional `businessId`) so a worker's logs
-and failures attribute to the right business.
+and failures attribute to the right business. A job has no tenancy shortcut: it
+rebuilds a `BusinessContext` through `requireBusinessContext`, the same
+membership check every request passes.
 
-## 7. Error handling
+Payloads are Zod-validated at **enqueue** time rather than in the worker, so a
+malformed payload fails at the button press where someone can see it instead of
+dead-lettering an hour later. `scripts/worker.ts` runs the loop standalone;
+`kickQueue` also drains in-process, so development needs no second terminal.
+
+## 7. Reading the outside world
+
+`src/server/scanner/` turns a website address into knowledge. Three ideas carry
+most of the weight.
+
+**Provenance is mandatory, not decorative.** A fact row cannot be written
+without a source URL, an extraction method and a confidence score — the columns
+are non-null and there is no code path that fabricates them. Verified facts
+(`business_facts`, `product_facts`) live in different tables from anything a
+model produces, and there is no operation that promotes an inference into them.
+
+**Strategies compete; nothing is averaged.** Four extractors run on every page
+and the highest-confidence candidate per field wins outright:
+
+```
+JSON_LD > MICRODATA > OPENGRAPH > HTML > TEXT_PATTERN
+```
+
+The order is a claim about intent: schema.org JSON-LD is something a merchant
+published deliberately, a regex over visible text is a guess. Averaging two
+disagreeing readings of a price would produce a number neither source states.
+
+**Refusing beats guessing.** `1,299` could be twelve hundred or one and a
+bit, depending on where you are, so `parsePriceNumber` returns `null` rather
+than picking. `costCents` stays empty unless a merchant typed it in. A crawl
+that hit a page limit never concludes a product was removed. A crawl that read
+nothing reports `unreachable` and fails, rather than presenting an empty site.
+
+Everything the scanner reads is a stranger's text: bounded, sanitised, stored
+as data, and shown with the URL it came from.
+
+## 8. Error handling
 
 Every failure crossing a module boundary is an `AppError` carrying:
 
@@ -152,7 +196,7 @@ Every failure crossing a module boundary is an `AppError` carrying:
 
 `toAppError` normalises anything thrown, preserving the original as `cause`.
 
-## 8. Security posture
+## 9. Security posture
 
 **Secrets.** OAuth tokens are encrypted at rest with AES-256-GCM
 (`src/lib/crypto.ts`), version-tagged for rotation, and bound to their context
@@ -172,23 +216,47 @@ vector. Login runs a dummy verification for unknown emails so timing does not
 reveal which addresses are registered.
 
 **SSRF.** The platform is _designed_ to fetch arbitrary user-supplied URLs,
-which makes this the highest-risk surface. Two gates: `assertSafePublicUrl`
-rejects private, loopback, link-local (including `169.254.169.254`), CGNAT,
-multicast and internal-TLD targets at the moment a URL is supplied; and the
-Phase 2 crawler re-validates the **resolved IP** immediately before connecting,
-because DNS can point a public hostname at a private address.
+which makes this the highest-risk surface. Two gates, both in
+`src/lib/net-safety.ts`:
+
+1. `assertSafePublicUrl` rejects private, loopback, link-local (including
+   `169.254.169.254`), CGNAT, multicast and internal-TLD targets, plus
+   non-HTTP schemes, embedded credentials and non-standard ports, at the moment
+   a URL is supplied.
+2. `assertResolvedAddressesArePublic` classifies the **resolved** addresses
+   immediately before connecting, and every one of them must be public. DNS can
+   point a public hostname at a private address, and one private `A` record is
+   enough to refuse.
+
+Redirects are followed manually, one hop at a time, so both gates re-run on
+every hop — `fetch`'s own redirect following would check the first URL and then
+connect wherever it was sent.
+
+Gate 1 classifies the host by **numeric address**, not by string shape. An
+earlier version matched only dotted quads, which let `http://2130706433/`,
+`http://0x7f000001/`, `http://127.1/`, `http://017700000001/` and
+`http://[::ffff:127.0.0.1]/` through — all of them `127.0.0.1`. Those five are
+now named regression tests.
+
+The only exemption is `UrlPolicy { allowedPrivateHosts }`, a **function
+argument with no configuration path**, so a test can reach a fixture on
+loopback without any deployment being able to turn the guard off.
 
 **Logging.** The logger redacts any key matching a secret pattern at any nesting
 depth, truncates long strings, and bounds recursion depth — scraped page text is
 unbounded and may be adversarial.
 
-**Prompt injection.** Website content is data, never instruction. From Phase 2,
-scraped text is stored and passed to models inside explicit delimiters, with the
-separation between system instruction, application instruction, user input,
-website data, and model output maintained structurally. All model output is
+**Prompt injection.** Website content is data, never instruction. The defence
+(`src/server/scanner/untrusted.ts`) is **structural, not filtering**: untrusted
+text is passed as a separate named parameter from the instruction, wrapped in a
+random per-call delimiter the content cannot guess and so cannot close, with
+control, zero-width and bidirectional-override characters neutralised and length
+bounded. Text that resembles an instruction is flagged and **passed through** —
+"ignore the noise" is legitimate product copy, and a filter would lose real
+information while stopping a determined attacker not at all. All model output is
 validated against a Zod schema before anything downstream consumes it.
 
-## 9. Configuration
+## 10. Configuration
 
 `src/lib/env.ts` is the only module that reads `process.env`. It validates
 everything once, eagerly, and fails at startup with every problem listed — not
@@ -197,7 +265,7 @@ cross-field rules: a live AI provider requires a key, mock mode is refused when
 serving production traffic, and the daily budget ceiling cannot exceed the
 campaign ceiling.
 
-## 10. Conventions
+## 11. Conventions
 
 - Money is stored as integer minor units with an ISO-4217 code. No floats near a
   budget.

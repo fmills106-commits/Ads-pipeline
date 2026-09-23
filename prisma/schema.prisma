@@ -207,6 +207,11 @@ model Business {
   jobs           Job[]
   activityEvents ActivityEvent[]
   costRecords    CostRecord[]
+  websites       Website[]
+  scanRuns       ScanRun[]
+  websitePages   WebsitePage[]
+  products       Product[]
+  businessFacts  BusinessFact[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
@@ -334,6 +339,9 @@ enum ProviderCapability {
   ANALYTICS
   SEARCH
   EMBEDDING
+  /// Fetching public web pages. Free locally; a paid scraping service (for
+  /// sites behind bot protection) could slot in behind the same interface.
+  WEB_FETCH
 }
 
 /// Whether using this provider can result in a bill.
@@ -388,6 +396,7 @@ enum CostKind {
   API_CALL
   EMBEDDING
   SEARCH
+  WEB_FETCH
 }
 
 /// One row per provider invocation, free or paid.
@@ -480,4 +489,351 @@ model ActivityEvent {
   @@index([businessId, createdAt])
   @@index([businessId, needsAttention])
   @@map("activity_events")
+}
+
+// =============================================================================
+// PHASE 2 — website knowledge
+// =============================================================================
+// What the scanner learned from a business's own website. Two principles run
+// through all of it:
+//
+//  1. PROVENANCE. Every extracted fact records the URL it came from, how it
+//     was extracted, and a confidence. A fact with no source is not a fact.
+//  2. HISTORY. Nothing is overwritten. A price change creates a new version
+//     row; the old value stays readable, because campaigns may still be
+//     carrying it.
+// =============================================================================
+
+/// One website per business (for now). Holds crawl-level state that persists
+/// between scans, so a rescan can be cheap and can detect change.
+model Website {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  /// Normalised origin, e.g. `https://example.com`.
+  rootUrl         String
+  /// Where the crawl actually landed after redirects, if different.
+  resolvedRootUrl String?
+
+  /// Raw robots.txt as fetched, kept so a decision to skip a page is auditable.
+  robotsTxt       String?
+  robotsFetchedAt DateTime?
+  /// Sitemap URLs discovered from robots.txt or the well-known location.
+  sitemapUrls     String[]
+
+  /// A hint for extraction strategy, never a hard-coded assumption: the
+  /// scanner tries every strategy regardless and uses this only for ordering.
+  platformHint String?
+
+  lastScanAt    DateTime?
+  lastScanRunId String?   @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pages    WebsitePage[]
+  products Product[]
+  scanRuns ScanRun[]
+
+  @@unique([businessId, rootUrl])
+  @@index([businessId])
+  @@map("websites")
+}
+
+enum ScanStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  /// Finished, but hit a limit before exhausting the site.
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+/// One scan attempt. Append-only: a rescan creates a new row rather than
+/// mutating the last one, which is what makes change detection possible.
+model ScanRun {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  websiteId  String?  @db.Uuid
+  website    Website? @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+
+  status       ScanStatus @default(QUEUED)
+  /// The URL the scan was asked to start from.
+  requestedUrl String
+
+  /// Which job is executing this, so the UI can show progress.
+  jobId String? @db.Uuid
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  // --- Counters, for the progress display and the activity feed -----------
+  pagesFetched   Int @default(0)
+  pagesSkipped   Int @default(0)
+  bytesFetched   Int @default(0)
+  productsFound  Int @default(0)
+  factsExtracted Int @default(0)
+
+  /// Why the crawl stopped: `completed`, `unreachable` (nothing could be read,
+  /// so the run is FAILED rather than empty), `page-limit`, `byte-limit`,
+  /// `time-limit`, `cancelled`, or `business-paused`.
+  stopReason String?
+  /// Structured, user-readable problems encountered (blocked pages, timeouts).
+  warnings   Json?
+  error      Json?
+
+  /// What changed relative to the previous completed scan of this website.
+  changeSummary Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([businessId, createdAt])
+  @@index([websiteId, createdAt])
+  @@index([status])
+  @@map("scan_runs")
+}
+
+enum PageType {
+  HOME
+  PRODUCT
+  COLLECTION
+  ABOUT
+  FAQ
+  SHIPPING
+  RETURNS
+  CONTACT
+  POLICY
+  BLOG
+  OTHER
+}
+
+/// A fetched page. `contentHash` is what makes rescans cheap and change
+/// detection exact.
+model WebsitePage {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  websiteId  String   @db.Uuid
+  website    Website  @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+
+  /// Normalised URL — the dedup key.
+  url      String
+  /// Where it ended up, if redirected.
+  finalUrl String?
+  pageType PageType @default(OTHER)
+
+  httpStatus      Int
+  title           String?
+  metaDescription String?
+
+  /// Visible text, stripped of markup and capped. UNTRUSTED: this is arbitrary
+  /// third-party content and is never treated as instruction.
+  extractedText  String?
+  /// JSON-LD, OpenGraph and microdata found on the page, as extracted.
+  structuredData Json?
+
+  /// SHA-256 of the normalised text + structured data. Unchanged hash on a
+  /// rescan means nothing to re-extract.
+  contentHash String
+
+  /// Links found, for the crawl frontier and for reporting.
+  outboundLinkCount Int @default(0)
+
+  fetchedAt   DateTime @default(now())
+  firstSeenAt DateTime @default(now())
+
+  @@unique([websiteId, url])
+  @@index([businessId, pageType])
+  @@index([websiteId, fetchedAt])
+  @@map("website_pages")
+}
+
+enum Availability {
+  IN_STOCK
+  OUT_OF_STOCK
+  PREORDER
+  UNKNOWN
+}
+
+/// A product or service discovered on the website.
+///
+/// Prices are integer minor units. `costCents` is absent unless the merchant
+/// supplied it — the scanner never infers a cost, because margin maths built
+/// on a guessed cost would be worse than no margin maths.
+model Product {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  websiteId  String   @db.Uuid
+  website    Website  @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+
+  /// The product page URL, normalised. The natural key within a website.
+  productUrl String
+  /// Merchant's own identifier when the page exposes one (SKU, MPN, id).
+  externalId String?
+
+  name        String
+  description String?
+
+  priceCents        Int?
+  /// A "was" price, only when the page states one explicitly.
+  comparePriceCents Int?
+  currency          String?
+  /// Merchant-supplied only. NEVER inferred.
+  costCents         Int?
+
+  availability Availability @default(UNKNOWN)
+  category     String?
+  brand        String?
+  sku          String?
+  tags         String[]
+
+  /// Offers/discounts the page states in so many words, e.g. "20% off".
+  statedOffers  Json?
+  /// Calls to action found on the page, e.g. "Add to cart".
+  callsToAction String[]
+
+  /// Hash of the extracted product fields, for change detection.
+  contentHash String
+
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  /// Set when a rescan no longer finds the product. Not deleted: campaigns may
+  /// still reference it, and §"do not advertise an unavailable product" needs
+  /// to know it went away.
+  removedAt   DateTime?
+
+  images   ProductImage[]
+  versions ProductVersion[]
+  facts    ProductFact[]
+
+  @@unique([websiteId, productUrl])
+  @@index([businessId, removedAt])
+  @@index([websiteId, lastSeenAt])
+  @@map("products")
+}
+
+model ProductImage {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  sourceUrl String
+  altText   String?
+  width     Int?
+  height    Int?
+  isPrimary Boolean @default(false)
+  position  Int     @default(0)
+
+  /// Set once the image has been copied into storage. Phase 4 populates it;
+  /// Phase 2 records the source URL only, because downloading every image is
+  /// bandwidth the scan does not need to spend.
+  storageKey String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([productId, sourceUrl])
+  @@index([productId])
+  @@map("product_images")
+}
+
+/// Every observed change to a product. The row that makes §48/§49 true: a
+/// price moving from $9.99 to $11.99 preserves the old value and lets the
+/// system flag campaigns carrying stale information.
+model ProductVersion {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// Monotonic per product, starting at 1 for the first observation.
+  versionNumber Int
+  /// Full snapshot of the extracted fields at this version.
+  snapshot      Json
+  /// Which fields differ from the previous version. Empty on version 1.
+  changedFields String[]
+  /// The scan that observed this version.
+  scanRunId     String?  @db.Uuid
+
+  detectedAt DateTime @default(now())
+
+  @@unique([productId, versionNumber])
+  @@index([productId, detectedAt])
+  @@map("product_versions")
+}
+
+/// How a fact was obtained. Ordered by how much it can be trusted: structured
+/// data a merchant published deliberately beats a heuristic guess at their
+/// markup.
+enum ExtractionMethod {
+  /// schema.org JSON-LD — published deliberately, highest confidence.
+  JSON_LD
+  /// OpenGraph / Twitter card meta tags.
+  OPENGRAPH
+  /// HTML microdata / RDFa attributes.
+  MICRODATA
+  /// Ordinary HTML elements and attributes (title, h1, itemprop-less markup).
+  HTML
+  /// Pattern-matched from visible text. Lowest confidence.
+  TEXT_PATTERN
+  /// Typed in by the merchant inside this application.
+  MERCHANT_PROVIDED
+}
+
+/// A VERIFIED fact about the business, traceable to a URL.
+///
+/// Deliberately a different table from anything AI-generated (Phase 3's
+/// `ai_inferences`). Nothing in here is a model's opinion; everything has a
+/// source URL and an excerpt. The UI renders the two differently, and an
+/// inference can never be promoted into this table.
+model BusinessFact {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  /// Dotted key, e.g. `business.name`, `contact.email`, `policy.returns`.
+  key   String
+  value String
+
+  /// Provenance. Not nullable — a fact without a source is not a fact.
+  sourceUrl     String
+  sourceExcerpt String?
+  method        ExtractionMethod
+  /// 0..1. Derived from the extraction method and corroboration, never invented.
+  confidence    Float
+
+  scanRunId String? @db.Uuid
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@unique([businessId, key, value])
+  @@index([businessId, key])
+  @@map("business_facts")
+}
+
+/// The same, scoped to one product.
+model ProductFact {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  key   String
+  value String
+
+  sourceUrl     String
+  sourceExcerpt String?
+  method        ExtractionMethod
+  confidence    Float
+
+  scanRunId String? @db.Uuid
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@unique([productId, key, value])
+  @@index([productId, key])
+  @@map("product_facts")
 }

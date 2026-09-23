@@ -12,7 +12,7 @@ the integration works.
 | Phase | Scope                                                                                                             | Status          |
 | ----- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
 | 1     | Foundation — TypeScript, database, auth, tenancy, UI shell, config, logging, errors                               | ✅ **Complete** |
-| 2     | Business onboarding — website scanner, sitemap discovery, page extraction, structured facts, product discovery    | Next            |
+| 2     | Business onboarding — website scanner, sitemap discovery, page extraction, structured facts, product discovery    | ✅ **Complete** |
 | 3     | AI marketing engine — business/product analysis, strategies, audience hypotheses, offer engine, ad copy           | Planned         |
 | 4     | Creative engine — templates, image provider, generation, QA, versioning, approval                                 | Planned         |
 | 5     | Campaign engine — builder, ad sets, ads, budget controls, mock advertising provider                               | Planned         |
@@ -56,28 +56,44 @@ five. See [UX.md](UX.md).
 
 Verified: 231 automated tests, clean build, 23-check end-to-end smoke test.
 
-## Phase 2 — Business onboarding
+## Phase 2 — Business onboarding ✅
 
-Website scanner with a per-host rate limiter and robots.txt compliance;
-sitemap discovery; multi-strategy extraction (JSON-LD → OpenGraph → HTML →
-text, in that order of trust); product discovery; `business_facts` and
-`product_facts` with URL-level provenance and a confidence score; the job
-worker loop; rescan with content-hash change detection and product versioning.
+Delivered: the website scanner with a per-host rate limiter and RFC 9309
+robots.txt compliance; sitemap discovery; multi-strategy extraction (JSON-LD →
+microdata → OpenGraph → HTML → text, in that order of trust); product
+discovery; `business_facts` and `product_facts` with mandatory URL-level
+provenance and a confidence score; the job queue and worker loop; rescan with
+content-hash change detection and product versioning; the `/website` results
+page.
 
 The second SSRF gate — re-validating the resolved IP immediately before
-connecting — lands here, alongside the first fetch the platform ever makes.
+connecting — landed here alongside the first fetch the platform ever makes, and
+the first gate was hardened after a real bypass was found: six alternative
+encodings of `127.0.0.1` that the Phase 1 guard accepted.
 
-Runs on free providers throughout — the crawler fetches public pages, which
-costs nothing.
+Ran on free providers throughout. The whole phase costs nothing; the Costs page
+records the scans at $0.
 
-Exit criterion: two materially different real websites onboarded through the
-normal flow, with products discovered and facts traceable to URLs.
+Verified: 382 automated tests (256 unit, 126 against real PostgreSQL), clean
+build, and a 12-check end-to-end run proving both SSRF gates hold on the
+production path.
+
+**Exit criterion not yet met.** It calls for two materially different _real_
+websites onboarded through the normal flow. The scanner is verified against a
+fixture that mixes real-world shapes, and against reserved-domain and
+private-address cases — but it has not been pointed at a live merchant site.
+That should happen before Phase 3 builds on its output.
+
+Full report: [PHASE-2.md](PHASE-2.md).
 
 ## Phase 3 — AI marketing engine
 
 The `AIProvider` interface and its free `ai.local` implementation already
-exist; this phase builds the engines that use them, and adds the optional
-Anthropic provider behind the same seam. All model
+exist, as do the verified facts to reason over and the untrusted-content
+containment that keeps scraped text out of instruction context
+(`src/server/scanner/untrusted.ts`, built in Phase 2 before there was anything
+to inject into). This phase builds the engines that use them, and adds the
+optional Anthropic provider behind the same seam. All model
 output validated against Zod schemas with a repair-then-retry-then-fail path;
 malformed data never passes downstream. Business and product analysis;
 marketing strategies with structured reasoning rather than invented scores;
@@ -85,8 +101,9 @@ audience _hypotheses_ stored separately from verified data; the offer engine
 with merchant constraints and explicit "margin unavailable" when cost is
 unknown; ad copy with the prohibited-claims list enforced.
 
-Prompt-injection defence is built here: scraped content enters prompts as
-delimited data, never as instruction.
+The prompt-injection mechanism shipped in Phase 2; this phase is where it
+starts doing work. Scraped content enters prompts as delimited data, never as
+instruction.
 
 ## Phase 4 — Creative engine
 

@@ -22,10 +22,12 @@ const CAPABILITY_LABEL: Record<ProviderCapability, string> = {
   ANALYTICS: 'Measuring results',
   SEARCH: 'Search',
   EMBEDDING: 'Similarity matching',
+  WEB_FETCH: 'Reading your website',
 };
 
 /** Only the capabilities that are actually wired up are shown. */
 const VISIBLE_CAPABILITIES: ProviderCapability[] = [
+  'WEB_FETCH',
   'AI',
   'IMAGE_GENERATION',
   'ADVERTISING',

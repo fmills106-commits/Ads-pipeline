@@ -1,6 +1,7 @@
 import type { Business, Prisma } from '@prisma/client';
 import { prisma, type Db } from '@/lib/db';
 import { conflict, validationError } from '@/lib/errors';
+import { assertSafePublicUrl } from '@/lib/net-safety';
 import { getEnv } from '@/lib/env';
 import { logger } from '@/lib/logger';
 import { AUDIT_ACTIONS, diffFields, recordAudit } from '@/server/audit/log';
@@ -188,60 +189,11 @@ export async function archiveBusiness(
 export { requireBusinessContext };
 
 /**
- * Rejects URLs the crawler must never be pointed at.
+ * Re-exported so callers keep one import for the business access path.
  *
- * This is the first line of SSRF defence: it runs at the moment a user supplies
- * a website URL, long before any fetch. It is NOT sufficient on its own — DNS
- * can resolve a public hostname to a private address — so the crawler in
- * Phase 2 re-validates the *resolved* IP immediately before connecting.
+ * The implementation moved to `src/lib/net-safety.ts` in Phase 2, where it is
+ * paired with the post-DNS check the crawler needs. The earlier version here
+ * only recognised dotted-quad IPv4, so `http://2130706433/` (which is
+ * `127.0.0.1`) passed — see that module for the fix.
  */
-export function assertSafePublicUrl(raw: string): URL {
-  let url: URL;
-  try {
-    url = new URL(raw.trim());
-  } catch {
-    throw validationError('Website URL is not a valid URL');
-  }
-
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw validationError('Website URL must use http or https');
-  }
-  if (url.username || url.password) {
-    throw validationError('Website URL must not contain credentials');
-  }
-
-  const host = url.hostname.toLowerCase();
-  if (isPrivateHostname(host)) {
-    throw validationError('Website URL must point at a public host');
-  }
-
-  return url;
-}
-
-/** Literal private/loopback/link-local targets, and obvious internal names. */
-function isPrivateHostname(host: string): boolean {
-  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
-  if (host === '[::1]' || host === '::1') return true;
-  if (host.endsWith('.internal') || host.endsWith('.home.arpa')) return true;
-
-  // IPv4 literals in private, loopback, link-local or reserved ranges.
-  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (ipv4) {
-    const octets = ipv4.slice(1, 5).map(Number);
-    const [a = 0, b = 0] = octets;
-    if (octets.some((octet) => octet > 255)) return true;
-    if (a === 0 || a === 10 || a === 127) return true;
-    if (a === 169 && b === 254) return true; // link-local, incl. cloud metadata
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
-    if (a >= 224) return true; // multicast and reserved
-  }
-
-  // IPv6 unique-local (fc00::/7) and link-local (fe80::/10).
-  const bare = host.replace(/^\[|\]$/g, '').toLowerCase();
-  if (/^f[cd][0-9a-f]{2}:/.test(bare)) return true;
-  if (/^fe[89ab][0-9a-f]:/.test(bare)) return true;
-
-  return false;
-}
+export { assertSafePublicUrl };
