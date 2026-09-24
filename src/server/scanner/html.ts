@@ -131,7 +131,7 @@ export function extractFromHtml(html: string, pageUrl: string): PageExtraction {
   const links = extractLinks(root, pageUrl);
 
   const business = extractBusiness({ root, jsonLd, openGraph, text, pageUrl });
-  const product = extractProduct({ root, jsonLd, openGraph, microdata, text, pageUrl });
+  const product = extractProduct({ root, jsonLd, openGraph, text, pageUrl });
 
   const pageType = classifyPageType({ pageUrl, title, text, product, jsonLd });
 
@@ -202,6 +202,46 @@ export function extractMetaMap(root: HTMLElement): Record<string, string> {
   return map;
 }
 
+/**
+ * The properties whose value is the element's link, not its text.
+ *
+ * This distinction matters: `<a itemprop="name" href="/product/120">Chromebook
+ * 11</a>` means the name is "Chromebook 11". Preferring `href` for every
+ * property extracted that product's name as
+ * "/test-sites/e-commerce/allinone/product/120".
+ */
+const LINK_VALUED_ITEMPROPS = new Set([
+  'url',
+  'sameas',
+  'availability',
+  'itemcondition',
+  'image',
+  'logo',
+  'contenturl',
+  'thumbnailurl',
+  'additionaltype',
+]);
+
+/** Reads one `itemprop`'s value, preferring the right source for its type. */
+function itemPropValue(node: HTMLElement, key: string): string | null {
+  const content = node.getAttribute('content')?.trim();
+  if (content) return content;
+
+  if (LINK_VALUED_ITEMPROPS.has(key)) {
+    const link = (node.getAttribute('href') ?? node.getAttribute('src'))?.trim();
+    if (link) return link;
+  }
+
+  const datetime = node.getAttribute('datetime')?.trim();
+  if (datetime) return datetime;
+
+  const text = node.text?.trim();
+  if (text) return text;
+
+  // A void element with no text, e.g. `<link itemprop="foo" href="…">`.
+  return (node.getAttribute('href') ?? node.getAttribute('src'))?.trim() ?? null;
+}
+
 /** Collects microdata `itemprop` values. */
 export function extractMicrodata(root: HTMLElement): Record<string, string> {
   const map: Record<string, string> = {};
@@ -210,14 +250,38 @@ export function extractMicrodata(root: HTMLElement): Record<string, string> {
     const key = node.getAttribute('itemprop')?.trim().toLowerCase();
     if (!key) continue;
 
-    const raw =
-      node.getAttribute('content') ??
-      node.getAttribute('datetime') ??
-      node.getAttribute('href') ??
-      node.text;
-    const content = raw?.trim();
+    const content = itemPropValue(node, key);
     if (!content) continue;
     if (map[key] === undefined) map[key] = content.slice(0, 2_000);
+  }
+
+  return map;
+}
+
+/**
+ * Microdata belonging to a `schema.org/Product` itemscope, and only that.
+ *
+ * `extractMicrodata` above deliberately flattens the whole page, which is the
+ * right shape for storage but wrong for product extraction: a `WebSite`,
+ * `Course` or `Organization` itemscope also has an `itemprop="name"`, and a
+ * pricing table has an `itemprop="price"`. Reading the flat map is how a
+ * homepage came to be extracted as a product called "Home" costing $1,187.98.
+ *
+ * Descendants are included, because `price`, `priceCurrency` and
+ * `availability` normally sit in a nested `Offer` itemscope.
+ */
+export function extractProductMicrodata(root: HTMLElement): Record<string, string> {
+  const map: Record<string, string> = {};
+
+  for (const scope of root.querySelectorAll('[itemtype*="schema.org/Product" i]')) {
+    for (const node of scope.querySelectorAll('[itemprop]')) {
+      const key = node.getAttribute('itemprop')?.trim().toLowerCase();
+      if (!key) continue;
+
+      const content = itemPropValue(node, key);
+      if (!content) continue;
+      if (map[key] === undefined) map[key] = content.slice(0, 2_000);
+    }
   }
 
   return map;
@@ -494,22 +558,49 @@ function extractProduct(input: {
   root: HTMLElement;
   jsonLd: unknown[];
   openGraph: Record<string, string>;
-  microdata: Record<string, string>;
   text: string;
   pageUrl: string;
 }): ExtractedProduct | null {
-  const { root, jsonLd, openGraph, microdata, text, pageUrl } = input;
+  const { root, jsonLd, openGraph, text, pageUrl } = input;
 
   const productNodes = findJsonLdOfType(jsonLd, ['Product', 'ProductGroup']);
   const ogType = (openGraph['og:type'] ?? '').toLowerCase();
-  const hasProductSignal =
+
+  /**
+   * The page says, in structured data, that it is about one product. This is a
+   * deliberate statement by the merchant, so it is taken at face value.
+   */
+  const declaredProduct =
     productNodes.length > 0 ||
     ogType.includes('product') ||
-    microdata['price'] !== undefined ||
-    root.querySelector('[itemtype*="schema.org/Product" i]') !== null ||
-    /\badd to (?:cart|bag|basket)\b/i.test(text);
+    root.querySelector('[itemtype*="schema.org/Product" i]') !== null;
 
-  if (!hasProductSignal) return null;
+  /**
+   * Circumstantial. A category page, a search result page and a homepage
+   * carousel all carry "add to basket" buttons and labelled prices — one per
+   * item — so this needs corroboration before anything is extracted from it.
+   *
+   * The labelled-price case is not redundant with the add-to-cart one: a real
+   * bookshop tested against this puts its basket button only on category
+   * pages, so its product pages had no cart signal at all and yielded nothing.
+   */
+  const circumstantial =
+    /\badd to (?:cart|bag|basket)\b/i.test(text) ||
+    root.querySelector('[itemprop="price" i]') !== null ||
+    root.querySelector('[class*="price" i]') !== null;
+
+  if (!declaredProduct && !circumstantial) return null;
+
+  /*
+   * A site's front page is never one product unless its own structured data
+   * says so. It is the page most likely to carry a stray price — a carousel,
+   * a "from $9" banner, a pricing table — and the least likely to be about a
+   * single item. Guessing here produced a product called "Home".
+   */
+  if (!declaredProduct && isSiteRoot(pageUrl)) return null;
+
+  // Only microdata inside a Product itemscope describes this product.
+  const productMicrodata = declaredProduct ? extractProductMicrodata(root) : {};
 
   const result: ExtractedProduct = { images: [], statedOffers: [], callsToAction: [] };
 
@@ -567,22 +658,28 @@ function extractProduct(input: {
   }
 
   // --- Microdata --------------------------------------------------------
-  if (microdata['name']) result.name = best(result.name, value(microdata['name'], 'MICRODATA'));
-  if (microdata['sku']) result.sku = best(result.sku, value(microdata['sku'], 'MICRODATA'));
-  if (microdata['brand']) result.brand = best(result.brand, value(microdata['brand'], 'MICRODATA'));
-  if (microdata['pricecurrency']) {
-    result.currency = best(result.currency, value(microdata['pricecurrency'], 'MICRODATA'));
+  if (productMicrodata['name']) {
+    result.name = best(result.name, value(productMicrodata['name'], 'MICRODATA'));
   }
-  if (microdata['price']) {
-    const parsed = parsePrice(microdata['price'], result.currency?.value ?? null);
+  if (productMicrodata['sku']) {
+    result.sku = best(result.sku, value(productMicrodata['sku'], 'MICRODATA'));
+  }
+  if (productMicrodata['brand']) {
+    result.brand = best(result.brand, value(productMicrodata['brand'], 'MICRODATA'));
+  }
+  if (productMicrodata['pricecurrency']) {
+    result.currency = best(result.currency, value(productMicrodata['pricecurrency'], 'MICRODATA'));
+  }
+  if (productMicrodata['price']) {
+    const parsed = parsePrice(productMicrodata['price'], result.currency?.value ?? null);
     if (parsed) {
       result.priceCents = best(
         result.priceCents,
-        value(parsed.cents, 'MICRODATA', microdata['price']),
+        value(parsed.cents, 'MICRODATA', productMicrodata['price']),
       );
     }
   }
-  const microAvailability = normaliseAvailability(microdata['availability']);
+  const microAvailability = normaliseAvailability(productMicrodata['availability']);
   if (microAvailability) {
     result.availability = best(result.availability, value(microAvailability, 'MICRODATA'));
   }
@@ -611,6 +708,52 @@ function extractProduct(input: {
   if (!result.name) {
     const heading = textOf(root.querySelector('h1'));
     if (heading) result.name = value(heading, 'HTML', heading);
+  }
+
+  /**
+   * The price, for a shop that publishes no structured data at all.
+   *
+   * Plenty do — a real bookshop tested against this had prices only in
+   * `<p class="price_color">£51.77</p>`, so every product came back with no
+   * price and was discarded. Two bounded attempts, in order of how much they
+   * can be trusted, and neither runs on a page that looks like a list:
+   *
+   *   1. An element the markup itself labels as the price.
+   *   2. A single distinct amount on the whole page — unambiguous by virtue
+   *      of being the only candidate.
+   *
+   * Anything less certain than that stays absent. A wrong price is worse than
+   * no price: it would be advertised.
+   */
+  if (result.priceCents === undefined && !looksLikeListing(text)) {
+    const labelledNode =
+      root.querySelector('[itemprop="price" i]') ??
+      root.querySelector('[class*="price" i]') ??
+      root.querySelector('[id*="price" i]');
+    const labelled = textOf(labelledNode);
+
+    // A long string is a container, not a price.
+    const fromLabel =
+      labelled !== undefined && labelled !== null && labelled.length <= 40
+        ? parsePrice(labelled, result.currency?.value ?? null)
+        : null;
+
+    if (fromLabel && labelled) {
+      result.priceCents = value(fromLabel.cents, 'HTML', labelled);
+      if (!result.currency && fromLabel.currency) {
+        result.currency = value(fromLabel.currency, 'HTML', labelled);
+      }
+    } else {
+      const amounts = new Set((text.match(PRICE_SHAPED) ?? []).map((a) => a.replace(/\s+/g, '')));
+      const only = amounts.size === 1 ? [...amounts][0] : undefined;
+      const parsed = only ? parsePrice(only, result.currency?.value ?? null) : null;
+      if (parsed && only) {
+        result.priceCents = value(parsed.cents, 'TEXT_PATTERN', only);
+        if (!result.currency && parsed.currency) {
+          result.currency = value(parsed.currency, 'TEXT_PATTERN', only);
+        }
+      }
+    }
   }
 
   // A "compare at" / "was" price, only where the markup labels it as one.
@@ -667,7 +810,56 @@ function extractProduct(input: {
   });
 
   // A product with no name is not usable downstream.
-  return result.name ? result : null;
+  if (!result.name) return null;
+
+  // Structured data settled it; nothing further to prove.
+  if (declaredProduct) return result;
+
+  // Everything below here got in on circumstantial evidence alone, and the
+  // name almost certainly came from the page's `<h1>`. On a real bookshop's
+  // category pages that produced products called "Travel" and "Mystery" with
+  // no price, and on a homepage a product called "Home" priced from a stray
+  // microdata block in a carousel. Neither exists.
+  //
+  // So: a price that plausibly belongs to *this* page, and no sign that the
+  // page is a list of many things. Refusing here loses the occasional real
+  // product from a site with no structured data at all — which the scan
+  // reports as pages read without products found, rather than inventing
+  // inventory the merchant does not sell.
+  if (result.priceCents === undefined) return null;
+  if (looksLikeListing(text)) return null;
+
+  return result;
+}
+
+/** Whether a URL is a site's front page. */
+function isSiteRoot(pageUrl: string): boolean {
+  try {
+    const { pathname } = new URL(pageUrl);
+    return pathname === '/' || pathname === '' || /^\/index\.\w+$/i.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
+/** Any currency-ish amount, for counting rather than parsing. */
+const PRICE_SHAPED = /(?:[$£€¥]\s?\d[\d.,]*|\d[\d.,]*\s?(?:USD|EUR|GBP|AUD|CAD))/g;
+
+/**
+ * Whether the page looks like a list of items rather than one item.
+ *
+ * Counts distinct prices and add-to-cart phrases in the visible text. One
+ * product page has a price and maybe a "was" price; a category page has
+ * twenty of each. Deliberately text-only — markup class names vary by theme,
+ * the shape of the content does not.
+ */
+function looksLikeListing(text: string): boolean {
+  const distinctPrices = new Set(
+    (text.match(PRICE_SHAPED) ?? []).map((p) => p.replace(/\s+/g, '')),
+  );
+  if (distinctPrices.size > 3) return true;
+
+  return (text.match(/\badd to (?:cart|bag|basket)\b/gi) ?? []).length > 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -708,14 +900,20 @@ export function classifyPageType(input: {
   // Structured data is the strongest signal available.
   if (findJsonLdOfType(jsonLd, ['Product', 'ProductGroup']).length > 0) return 'PRODUCT';
 
+  /*
+   * A named, priced product beats a guess made from the URL. `extractProduct`
+   * refuses to produce one for anything that looks like a list, so reaching
+   * here means the page really is about a single item — and plenty of shops
+   * serve those from paths like `/catalogue/<slug>/`, which the collection
+   * rule below would otherwise claim.
+   */
+  if (product?.priceCents !== undefined) return 'PRODUCT';
+
   for (const rule of PATH_RULES) {
     if (rule.pattern.test(pathname)) return rule.type;
   }
 
   if (pathname === '/' || pathname === '') return 'HOME';
-
-  // Extraction found a usable product even though the path was unremarkable.
-  if (product?.priceCents !== undefined) return 'PRODUCT';
 
   const heading = `${title ?? ''} ${text.slice(0, 400)}`.toLowerCase();
   if (/frequently asked|faq/.test(heading)) return 'FAQ';

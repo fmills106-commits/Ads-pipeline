@@ -11,7 +11,7 @@ import { createBusiness } from '@/server/business/service';
 import { requireBusinessContext, requireWorkspaceContext } from '@/server/tenancy/context';
 import { recentActivity } from '@/server/activity/feed';
 import type { UrlPolicy } from '@/lib/net-safety';
-import { startFixtureSite, type FixtureSite } from '../helpers/fixture-site';
+import { FIXTURE_PRODUCT_COUNT, startFixtureSite, type FixtureSite } from '../helpers/fixture-site';
 import { createTestUser, createTestWorkspace, resetDatabase } from '../helpers/db';
 
 let site: FixtureSite;
@@ -61,7 +61,7 @@ describe('persisting a scan', () => {
     const result = await persistScan(context, scanRun.id, await crawl());
 
     expect(result.pagesStored).toBeGreaterThan(3);
-    expect(result.productsFound).toBe(3);
+    expect(result.productsFound).toBe(FIXTURE_PRODUCT_COUNT);
     expect(result.factsExtracted).toBeGreaterThan(0);
 
     const products = await prisma.product.findMany({ where: { businessId: context.businessId } });
@@ -109,10 +109,10 @@ describe('persisting a scan', () => {
     const result = await persistScan(context, scanRun.id, await crawl());
 
     expect(result.changeSummary.isFirstScan).toBe(true);
-    expect(result.productsNew).toBe(3);
+    expect(result.productsNew).toBe(FIXTURE_PRODUCT_COUNT);
 
     const versions = await prisma.productVersion.findMany();
-    expect(versions).toHaveLength(3);
+    expect(versions).toHaveLength(FIXTURE_PRODUCT_COUNT);
     expect(versions.every((version) => version.versionNumber === 1)).toBe(true);
   });
 
@@ -145,9 +145,9 @@ describe('rescanning and change detection', () => {
 
     expect(result.productsNew).toBe(0);
     expect(result.productsChanged).toBe(0);
-    expect(await prisma.product.count()).toBe(3);
+    expect(await prisma.product.count()).toBe(FIXTURE_PRODUCT_COUNT);
     // Still one version each: nothing changed, so nothing was versioned.
-    expect(await prisma.productVersion.count()).toBe(3);
+    expect(await prisma.productVersion.count()).toBe(FIXTURE_PRODUCT_COUNT);
   });
 
   it('versions a price change instead of overwriting it', async () => {
@@ -236,7 +236,7 @@ describe('rescanning and change detection', () => {
     const result = await persistScan(context, second.id, partial);
 
     expect(result.productsRemoved).toBe(0);
-    expect(await prisma.product.count({ where: { removedAt: null } })).toBe(3);
+    expect(await prisma.product.count({ where: { removedAt: null } })).toBe(FIXTURE_PRODUCT_COUNT);
   });
 });
 
@@ -255,8 +255,8 @@ describe('tenant isolation', () => {
     const knowledgeA = await getWebsiteKnowledge(a);
     const knowledgeB = await getWebsiteKnowledge(b);
 
-    expect(knowledgeA.products).toHaveLength(3);
-    expect(knowledgeB.products).toHaveLength(3);
+    expect(knowledgeA.products).toHaveLength(FIXTURE_PRODUCT_COUNT);
+    expect(knowledgeB.products).toHaveLength(FIXTURE_PRODUCT_COUNT);
     // Same site, same data, but stored under separate businesses.
     expect(knowledgeA.website?.id).not.toBe(knowledgeB.website?.id);
     expect(knowledgeA.products.every((p) => p.businessId === a.businessId)).toBe(true);

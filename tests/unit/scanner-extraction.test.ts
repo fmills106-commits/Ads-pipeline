@@ -434,3 +434,160 @@ describe('untrusted content containment', () => {
     });
   });
 });
+
+/**
+ * Cases taken from the two real shops Phase 2 was finally tested against.
+ *
+ * Every one of these produced a wrong extraction before the fix — inventing
+ * products that do not exist, or missing ones that do. The fixture was built
+ * from structured-data-rich markup, so none of it was caught until the
+ * scanner met a real site.
+ */
+describe('regressions from the first real websites', () => {
+  const extract = (body: string, url = 'https://shop.example.com/page') =>
+    extractFromHtml(
+      `<!DOCTYPE html><html><head><title>t</title></head><body>${body}</body></html>`,
+      url,
+    );
+
+  describe('a category listing is not a product', () => {
+    const listing = `<h1>Travel</h1>
+      <li><a href="/a">A</a><p class="price">£51.77</p><button>Add to basket</button></li>
+      <li><a href="/b">B</a><p class="price">£22.65</p><button>Add to basket</button></li>
+      <li><a href="/c">C</a><p class="price">£33.34</p><button>Add to basket</button></li>
+      <li><a href="/d">D</a><p class="price">£17.93</p><button>Add to basket</button></li>`;
+
+    it('extracts no product from it', () => {
+      // Stored "Travel" and "Mystery" as priceless products on a real bookshop.
+      expect(extract(listing, 'https://shop.example.com/category/travel').product).toBeNull();
+    });
+
+    it('does not name a product after the category heading', () => {
+      const result = extract(listing, 'https://shop.example.com/category/travel');
+      expect(result.product?.name?.value).not.toBe('Travel');
+    });
+  });
+
+  describe('a front page is not a product', () => {
+    it('refuses even with one price and a basket button', () => {
+      // Became a product called "Home" costing $1,187.98.
+      const result = extract(
+        '<h1>Home</h1><p class="price">$1,187.98</p><button>Add to cart</button>',
+        'https://shop.example.com/',
+      );
+      expect(result.product).toBeNull();
+      expect(result.pageType).toBe('HOME');
+    });
+
+    it('still allows one when the page says so in structured data', () => {
+      const result = extract(
+        `<h1>Single product shop</h1>
+         <script type="application/ld+json">
+         {"@context":"https://schema.org","@type":"Product","name":"The One Thing",
+          "offers":{"@type":"Offer","price":"20.00","priceCurrency":"USD"}}
+         </script>`,
+        'https://oneproduct.example.com/',
+      );
+      expect(result.product?.name?.value).toBe('The One Thing');
+    });
+  });
+
+  describe('microdata outside a Product scope is not product data', () => {
+    /**
+     * A page with a heading and a labelled price is genuinely ambiguous — a
+     * one-product shop looks exactly like a membership page — so the scanner
+     * is not asked to tell them apart. What it must not do is claim the
+     * merchant *published* this as product data when they published something
+     * else. The provenance carries that distinction, and Phase 3 can weigh a
+     * 0.7 guess differently from a 0.9 statement.
+     */
+    it('does not claim structured-data provenance for another itemtype', () => {
+      const result = extract(
+        `<div itemscope itemtype="https://schema.org/WebSite">
+           <h1 itemprop="name">Membership</h1>
+         </div>
+         <p class="price">$1,187.98 per year</p>`,
+      );
+
+      expect(result.product?.name?.method).not.toBe('MICRODATA');
+      expect(result.product?.priceCents?.method).not.toBe('MICRODATA');
+    });
+
+    it('still records it as raw structured data for later', () => {
+      // Flattened microdata remains useful to store; it is only unfit to be
+      // read as *this page's product*.
+      const result = extract(
+        '<div itemscope itemtype="https://schema.org/WebSite"><h1 itemprop="name">Membership</h1></div>',
+      );
+      expect(result.structuredData.microdata['name']).toBe('Membership');
+    });
+  });
+
+  describe('itemprop values come from the right attribute', () => {
+    it('reads a name from the link text, not its href', () => {
+      // Named a real product "/test-sites/e-commerce/allinone/product/120".
+      const result = extract(
+        `<div itemscope itemtype="https://schema.org/Product">
+           <a itemprop="name" href="/product/120">Acer Predator Helios 300</a>
+           <div itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+             <span itemprop="price" content="1187.98">$1,187.98</span>
+             <meta itemprop="priceCurrency" content="USD">
+           </div>
+         </div>`,
+      );
+
+      expect(result.product?.name?.value).toBe('Acer Predator Helios 300');
+      expect(result.product?.priceCents?.value).toBe(118798);
+    });
+
+    it('still reads a link-valued property from its href', () => {
+      const result = extract(
+        `<div itemscope itemtype="https://schema.org/Product">
+           <h1 itemprop="name">Thing</h1>
+           <div itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+             <span itemprop="price" content="5.00">$5.00</span>
+             <link itemprop="availability" href="https://schema.org/OutOfStock">
+           </div>
+         </div>`,
+      );
+      expect(result.product?.availability?.value).toBe('OUT_OF_STOCK');
+    });
+  });
+
+  describe('a shop with no structured data at all', () => {
+    const plain = `<h1>A Light in the Attic</h1>
+      <p>It's hard to imagine a world without this book.</p>
+      <p class="price_color">£51.77</p>
+      <table><tr><th>Price (excl. tax)</th><td>£51.77</td></tr>
+             <tr><th>Tax</th><td>£0.00</td></tr></table>`;
+
+    it('finds the product from a price the markup labels', () => {
+      // A real bookshop's entire catalogue yielded nothing before this.
+      const result = extract(plain, 'https://books.example.com/catalogue/a-light_1000/index.html');
+
+      expect(result.product?.name?.value).toBe('A Light in the Attic');
+      expect(result.product?.priceCents?.value).toBe(5177);
+      expect(result.product?.currency?.value).toBe('GBP');
+    });
+
+    it('records the weaker method rather than claiming structured data', () => {
+      const result = extract(plain, 'https://books.example.com/catalogue/a-light_1000/index.html');
+      expect(result.product?.priceCents?.method).toBe('HTML');
+    });
+
+    it('classifies it as a product page despite a catalogue-shaped URL', () => {
+      // `/catalogue/` matches the collection rule; a named, priced product
+      // found on the page is the stronger signal.
+      const result = extract(plain, 'https://books.example.com/catalogue/a-light_1000/index.html');
+      expect(result.pageType).toBe('PRODUCT');
+    });
+
+    it('refuses when there is no price to be sure of', () => {
+      const result = extract(
+        '<h1>Mystery item</h1><p>No price anywhere.</p><button>Add to cart</button>',
+        'https://shop.example.com/products/mystery',
+      );
+      expect(result.product).toBeNull();
+    });
+  });
+});

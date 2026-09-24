@@ -18,6 +18,14 @@ import type { AddressInfo } from 'node:net';
  *  - a non-HTML file the crawler must skip
  */
 
+/**
+ * How many products a full crawl of this fixture discovers.
+ *
+ * Named rather than repeated, so adding a page to the fixture updates one
+ * number instead of breaking five assertions that each meant "all of them".
+ */
+export const FIXTURE_PRODUCT_COUNT = 5;
+
 export interface FixtureSite {
   origin: string;
   close: () => Promise<void>;
@@ -70,6 +78,9 @@ const ROUTES: Record<string, { body: string; type?: string; status?: number; loc
          <a href="/about">About</a>
          <a href="/contact">Contact</a>
          <a href="/shipping">Shipping</a>
+         <a href="/collections/flours">Flours</a>
+         <a href="/shop/linen-couche">Linen couche</a>
+         <a href="/products/linked-name">Proving cloth</a>
          <a href="/admin">Admin</a>
          <a href="/admin/public">Public notice</a>
          <a href="/catalogue.pdf">Catalogue</a>
@@ -180,6 +191,76 @@ const ROUTES: Record<string, { body: string; type?: string; status?: number; loc
         'Sourdough Starter — copy',
         '<h1>Sourdough Starter</h1>',
         '<link rel="canonical" href="http://REPLACED/products/sourdough-starter">',
+      ),
+    },
+
+    /*
+     * Shapes taken from the two real shops Phase 2 was finally tested against.
+     * Each one produced a wrong extraction before it was fixed, so each is
+     * here to keep that fix honest.
+     */
+
+    // A category listing: a price and a basket button per row, and the only
+    // heading is the category name. Extracted "Travel" and "Mystery" as
+    // products, with no price, on a real bookshop.
+    '/collections/flours': {
+      body: page(
+        'Flours',
+        `<h1>Flours</h1>
+       <ul>
+         <li><a href="/products/rye-flour">Rye flour</a> <p class="price">£7.90</p>
+             <button>Add to basket</button></li>
+         <li><a href="/products/spelt">Spelt flour</a> <p class="price">£8.40</p>
+             <button>Add to basket</button></li>
+         <li><a href="/products/einkorn">Einkorn flour</a> <p class="price">£11.20</p>
+             <button>Add to basket</button></li>
+         <li><a href="/products/emmer">Emmer flour</a> <p class="price">£9.95</p>
+             <button>Add to basket</button></li>
+       </ul>`,
+      ),
+    },
+
+    // A plain-HTML product page: no JSON-LD, no OpenGraph, no microdata, and
+    // no basket button either — the price is labelled by a class and nothing
+    // else. This is what a real bookshop's product pages look like, and they
+    // yielded nothing at all.
+    '/shop/linen-couche': {
+      body: page(
+        'Linen couche',
+        `<h1>Linen couche</h1>
+       <p>Heavyweight flax, 70cm, for proving baguettes.</p>
+       <p class="price_color">£18.50</p>
+       <table>
+         <tr><th>Price (excl. tax)</th><td>£18.50</td></tr>
+         <tr><th>Tax</th><td>£0.00</td></tr>
+       </table>`,
+      ),
+    },
+
+    // Microdata that is not a Product. A homepage with an itemprop="name" and
+    // a price in a pricing table became a product called "Home" at $1,187.98.
+    '/plans': {
+      body: page(
+        'Membership',
+        `<div itemscope itemtype="https://schema.org/WebSite">
+         <h1 itemprop="name">Membership</h1>
+       </div>
+       <p class="price">$1,187.98 per year</p>`,
+      ),
+    },
+
+    // `itemprop="name"` on a link inside a real Product scope. Reading the
+    // href instead of the text named a product "/product/120".
+    '/products/linked-name': {
+      body: page(
+        'Proving cloth',
+        `<div itemscope itemtype="https://schema.org/Product">
+         <a itemprop="name" href="/products/linked-name">Proving cloth</a>
+         <div itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+           <span itemprop="price" content="12.00">$12.00</span>
+           <meta itemprop="priceCurrency" content="USD">
+         </div>
+       </div>`,
       ),
     },
 

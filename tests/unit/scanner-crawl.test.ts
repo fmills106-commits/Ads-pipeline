@@ -147,6 +147,50 @@ describe('crawling a site end to end', () => {
   });
 });
 
+/**
+ * The crawl over the fixture pages modelled on the first real shops. These
+ * exercise the whole path — socket, robots, extraction — rather than calling
+ * the extractor directly.
+ */
+describe('product discovery across awkward real-world pages', () => {
+  const pageFor = (path: string) => crawl.pages.find((page) => page.finalUrl.endsWith(path));
+
+  it('finds no product on a category listing', () => {
+    const listing = pageFor('/collections/flours');
+    expect(listing?.extraction.product).toBeNull();
+    expect(listing?.extraction.pageType).toBe('COLLECTION');
+  });
+
+  it('finds a product on a page whose only price is a labelled element', () => {
+    const plain = pageFor('/shop/linen-couche');
+
+    expect(plain?.extraction.product?.name?.value).toBe('Linen couche');
+    expect(plain?.extraction.product?.priceCents?.value).toBe(1850);
+    expect(plain?.extraction.product?.currency?.value).toBe('GBP');
+  });
+
+  it('reads an itemprop name from the link text', () => {
+    const linked = pageFor('/products/linked-name');
+
+    expect(linked?.extraction.product?.name?.value).toBe('Proving cloth');
+    expect(linked?.extraction.product?.priceCents?.value).toBe(1200);
+  });
+
+  it('does not read product data out of a non-Product itemscope', () => {
+    const plans = pageFor('/plans');
+    expect(plans?.extraction.product?.name?.method).not.toBe('MICRODATA');
+  });
+
+  it('never names a product after a page heading that is a category', () => {
+    const names = crawl.pages
+      .map((page) => page.extraction.product?.name?.value)
+      .filter((name): name is string => typeof name === 'string');
+
+    expect(names).not.toContain('Flours');
+    expect(names).not.toContain('Alpine Bakery Supply');
+  });
+});
+
 describe('SSRF defence during a crawl', () => {
   it('refuses a redirect to the cloud metadata endpoint', async () => {
     // 127.0.0.1 is exempt for the fixture; 169.254.169.254 is not, so this

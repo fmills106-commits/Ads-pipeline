@@ -78,11 +78,18 @@ Verified: 382 automated tests (256 unit, 126 against real PostgreSQL), clean
 build, and a 12-check end-to-end run proving both SSRF gates hold on the
 production path.
 
-**Exit criterion not yet met.** It calls for two materially different _real_
-websites onboarded through the normal flow. The scanner is verified against a
-fixture that mixes real-world shapes, and against reserved-domain and
-private-address cases — but it has not been pointed at a live merchant site.
-That should happen before Phase 3 builds on its output.
+**Exit criterion met**, and it earned its keep. Pointed at two materially
+different real shops — one publishing schema.org microdata, one with no
+structured data whatsoever — the scanner found three bugs the fixture could
+not:
+
+- category pages extracted as products named after the category, with no price;
+- a front page extracted as a product named "Home" from a stray microdata price;
+- a shop with no structured data yielding nothing at all, because there was no
+  HTML price path.
+
+All three are fixed and covered by tests. Both shops now yield correctly named,
+correctly priced products with their extraction method recorded.
 
 Full report: [PHASE-2.md](PHASE-2.md).
 

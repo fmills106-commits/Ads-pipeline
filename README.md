@@ -35,8 +35,9 @@ built and tested.
 
 Point it at a website today and it will read the pages, find the products, and
 record the prices, offers and contact details — each fact carrying the URL it
-came from and how it was extracted. It has not yet been run against a live
-merchant site; that is Phase 2's one outstanding exit criterion.
+came from and how it was extracted. It has been run against real shops, both
+with and without structured data; doing that found four extraction bugs no
+fixture had caught, all fixed and covered by tests.
 
 The AI marketing engine, creative generation and Meta integration arrive in
 Phases 3–6. The seams they plug into exist now, each with its free

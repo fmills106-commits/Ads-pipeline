@@ -216,15 +216,15 @@ service takes a `BusinessContext`; the background job rebuilds one through
 
 ## 5. Verification
 
-### Tests — 382 passing (256 unit, 126 against real PostgreSQL)
+### Tests — 399 passing (273 unit, 126 against real PostgreSQL)
 
-161 of them are new in this phase:
+178 of them are new in this phase:
 
 | File                                    | Tests | Covers                                                                       |
 | --------------------------------------- | ----: | ---------------------------------------------------------------------------- |
 | `tests/unit/net-safety.test.ts`         |    38 | IPv4/IPv6 parsing, host classification, both gates, normalisation            |
-| `tests/unit/scanner-extraction.test.ts` |    52 | JSON-LD, microdata, OpenGraph, prices, offers, robots, sitemaps, containment |
-| `tests/unit/scanner-crawl.test.ts`      |    29 | The crawl against a real HTTP server on a real socket                        |
+| `tests/unit/scanner-extraction.test.ts` |    64 | JSON-LD, microdata, OpenGraph, prices, offers, robots, sitemaps, containment |
+| `tests/unit/scanner-crawl.test.ts`      |    34 | The crawl against a real HTTP server on a real socket                        |
 | `tests/db/jobs.test.ts`                 |    21 | Claiming, double-claim, idempotency races, backoff, dead-letter, reclaim     |
 | `tests/db/scanner.test.ts`              |    21 | Persistence, provenance, versioning, change detection, tenant isolation      |
 
@@ -300,12 +300,8 @@ is the argument for the verification step, not a footnote to it.
 ## 6. What remains for Phase 3
 
 Phase 2's exit criterion — _two materially different real websites onboarded,
-products discovered, facts traceable to URLs_ — **has not been met.** The
-scanner is verified against a fixture that deliberately mixes real-world
-shapes, and against the reserved-domain and private-address cases. It has not
-been pointed at a live shop, because this environment's outbound network is
-proxied and a real merchant site is not a fixture. That test needs a browser, a
-URL and five minutes, and it should happen before Phase 3 depends on the output.
+products discovered, facts traceable to URLs_ — **is met.** See §7 for what
+that test found, which was not nothing.
 
 Carried forward from the Phase 1 report, still open:
 
@@ -331,3 +327,66 @@ New, and Phase 3's to resolve or inherit:
 Phase 3 starts from `business_facts` and `product_facts` and adds the marketing
 engine. Its first obligation is the one this phase set up for it: an AI
 inference must never be written where a verified fact belongs.
+
+---
+
+## 7. The first real websites
+
+Two shops chosen to be materially different, both crawled through the
+production path with the strict URL policy, an eight-page cap and the
+crawler's normal politeness:
+
+| Site                 | Structured data      | What it tests                       |
+| -------------------- | -------------------- | ----------------------------------- |
+| `webscraper.io`      | schema.org microdata | The structured path, on real markup |
+| `books.toscrape.com` | **none at all**      | The HTML fallbacks, with no help    |
+
+Both now extract correctly:
+
+- **MSI GL72M 7RDX** — $1,099.00 USD, `MICRODATA`, confidence 0.9
+- **A Light in the Attic** — £51.77 GBP, `HTML`, confidence 0.7
+
+Getting there took four fixes. The fixture had been written with generous
+structured data on every product page, so none of this was reachable until the
+scanner met markup nobody wrote for it.
+
+**Category pages became products.** "Add to basket" appears once per row on a
+listing, which satisfied the product signal; with no structured data the name
+fell back to the page's `<h1>`. A real bookshop's category pages would have
+been stored as products called "Travel" and "Mystery", with no price. Product
+extraction now needs either structured data declaring one product, or a price
+plus no sign the page is a list of many.
+
+**The front page became a product.** A flattened microdata map collected every
+`itemprop` on the page regardless of which `itemscope` it belonged to, so a
+`WebSite` scope's `name` and a pricing table's `price` combined into a product
+called "Home" costing $1,187.98. Product microdata is now read only from inside
+a `schema.org/Product` scope, and a site's root is never treated as a single
+product unless its own structured data says so.
+
+**A product was named after its URL.** `itemprop` values preferred the `href`
+attribute over the element's text, so `<a itemprop="name" href="/product/120">`
+yielded "/test-sites/e-commerce/allinone/product/120". The attribute is now
+chosen by property: links for `url`, `image` and `availability`, text for
+everything else.
+
+**A whole shop yielded nothing.** `books.toscrape.com` publishes prices only as
+`<p class="price_color">£51.77</p>` — no JSON-LD, no OpenGraph, no microdata,
+and no basket button on product pages either. There was no HTML price path at
+all, so every product was discarded for having no price. There are now two
+bounded attempts: an element the markup labels as the price, or a single
+distinct amount on the whole page. Neither runs on a page that looks like a
+list, and both record the weaker method so nothing claims to be structured data
+that isn't.
+
+One case was left deliberately unresolved. A page with a heading and a labelled
+price is genuinely ambiguous — a one-product shop looks exactly like a
+membership page — so the scanner does not try to tell them apart. What it must
+not do is claim the merchant _published_ product data when they published
+something else, and the recorded method carries that distinction: Phase 3 can
+weigh an `HTML` 0.7 guess differently from a `MICRODATA` 0.9 statement.
+
+Every fix is covered by tests built from the real markup that broke it —
+17 new assertions across `scanner-extraction.test.ts` and
+`scanner-crawl.test.ts`, plus four fixture pages carrying the shapes that
+caused the trouble.
