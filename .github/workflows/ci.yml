@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# A second push to the same branch makes the first run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: adsdev
+          POSTGRES_PASSWORD: adsdev
+          POSTGRES_DB: ads_pipeline_test
+        ports: ['5432:5432']
+        # Without this the first migration races the server's own startup.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Mirrors .env.test. Secrets are deliberately fixed literals: the test
+      # database holds nothing, and a real secret here would be a real secret
+      # in a public log.
+      NODE_ENV: test
+      APP_URL: http://localhost:3000
+      DATABASE_URL: postgresql://adsdev:adsdev@127.0.0.1:5432/ads_pipeline_test
+      AUTH_SECRET: ci-only-auth-secret-not-used-anywhere-real-000000
+      ENCRYPTION_KEY: ZGV2LW9ubHktMzItYnl0ZS1lbmNyeXB0aW9uLWtleS0xMg==
+      LOG_LEVEL: warn
+      LOG_FORMAT: json
+      # The whole suite must pass with every paid provider switched off.
+      ZERO_COST_MODE: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx prisma generate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Check migrations match the schema
+        # Catches a schema.prisma edited without a migration written for it,
+        # which would otherwise only surface on the next deploy.
+        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$DATABASE_URL" --exit-code
+        continue-on-error: false
+
+      - run: npm run format:check
+
+      - run: npm run lint
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - name: Production build
+        run: npm run build
+        env:
+          # The build imports modules that validate configuration at load, so
+          # it needs a production-shaped environment to be a real check.
+          NODE_ENV: production
+          APP_URL: https://ci.example.com
+          CRON_SECRET: ci-only-cron-secret-not-used-anywhere-real

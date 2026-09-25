@@ -83,18 +83,27 @@ export async function runOneJob(
 }
 
 /**
- * Drains the queue until it is empty.
+ * Drains the queue until it is empty, a job bound is hit, or time runs out.
  *
- * Bounded by `maxJobs` so a test cannot spin forever and so a request-triggered
- * drain cannot run away. Used by the worker loop and by tests.
+ * `maxJobs` stops a test spinning forever. `budgetMs` is what makes this
+ * usable on a host that kills invocations: it stops *starting* work once the
+ * budget is spent, so the call returns of its own accord rather than being
+ * terminated part-way through a job it would then have to repeat.
+ *
+ * The budget is checked between jobs, not inside them. A single job that
+ * overruns is the crawl's own business — it has its own time ceiling and
+ * reports PARTIAL when it hits it.
  */
 export async function drainQueue(
-  options: { maxJobs?: number; types?: JobType[]; db?: Db } = {},
+  options: { maxJobs?: number; budgetMs?: number; types?: JobType[]; db?: Db } = {},
 ): Promise<number> {
   const maxJobs = options.maxJobs ?? 100;
+  const deadline = options.budgetMs === undefined ? null : Date.now() + options.budgetMs;
   let processed = 0;
 
   while (processed < maxJobs) {
+    if (deadline !== null && Date.now() >= deadline) break;
+
     const result = await runOneJob({
       ...(options.types ? { types: options.types } : {}),
       ...(options.db ? { db: options.db } : {}),

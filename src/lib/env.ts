@@ -62,6 +62,39 @@ const envSchema = z
     // explicit, deliberate act — the application never does it on your behalf.
     ZERO_COST_MODE: boolish(true),
 
+    // --- Public deployment ------------------------------------------------
+    /**
+     * Which reverse proxy sits in front of this deployment, if any.
+     *
+     * This decides which header the real client IP is read from, and it is
+     * configuration rather than detection on purpose: `X-Forwarded-For`
+     * arrives from the open internet and anyone can set it, so trusting it
+     * unconditionally would let one caller defeat per-IP rate limiting by
+     * rotating a header. `none` (the default) reads no proxy header at all.
+     */
+    TRUSTED_PROXY: z.enum(['none', 'cloudflare', 'vercel']).default('none'),
+
+    /**
+     * Shared secret authorising the scheduled worker endpoint.
+     *
+     * Required in production: without a worker nothing in the queue ever
+     * runs, and an unauthenticated drain endpoint is a free denial-of-service
+     * against every tenant's crawl budget. Generate with
+     * `openssl rand -base64 32`.
+     */
+    CRON_SECRET: z.string().min(24).optional(),
+
+    /**
+     * How long one worker invocation may spend before returning.
+     *
+     * The default suits a process that owns its own lifetime. On a serverless
+     * host it must be set below the platform's function timeout, or the
+     * invocation is killed mid-crawl and the work is repeated rather than
+     * finished. A crawl cut short by this budget reports PARTIAL with the
+     * pages it did read — accurate, just incomplete — instead of failing.
+     */
+    WORKER_MAX_RUN_MS: intish(4 * 60 * 1000),
+
     // --- Phase 2: website scanner ----------------------------------------
     CRAWLER_USER_AGENT: z.string().default('AdsPipelineBot/0.1'),
     CRAWLER_MIN_DELAY_MS: intish(1_000),
@@ -148,6 +181,46 @@ const envSchema = z
         path: ['MAX_DAILY_PROVIDER_COST_CENTS'],
         message: 'cannot exceed MAX_MONTHLY_PROVIDER_COST_CENTS (0 means no paid spend at all)',
       });
+    }
+
+    /*
+     * --- Production-only requirements -------------------------------------
+     *
+     * Fine to omit locally, dangerous to omit once a domain points at the
+     * deployment, so they fail at boot rather than at 3am.
+     *
+     * Skipped during `next build`, which sets NODE_ENV=production while
+     * compiling: a build reads pages, it does not serve requests, and
+     * demanding a real session secret to produce a bundle would mean nobody
+     * could run `npm run build` without production credentials to hand.
+     * Vercel and the Dockerfile both build before these values exist.
+     */
+    const isBuild = value.NEXT_PHASE === 'phase-production-build';
+
+    if (value.NODE_ENV === 'production' && !isBuild) {
+      if (value.APP_URL.startsWith('http://')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['APP_URL'],
+          message:
+            'must be https:// in production — session cookies are only marked secure when it is',
+        });
+      }
+      if (!value.CRON_SECRET) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['CRON_SECRET'],
+          message:
+            'is required in production, or queued scans never run. Generate one with `openssl rand -base64 32`',
+        });
+      }
+      if (value.LOG_FORMAT === 'pretty') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['LOG_FORMAT'],
+          message: 'must be json in production so logs stay machine-readable',
+        });
+      }
     }
   });
 

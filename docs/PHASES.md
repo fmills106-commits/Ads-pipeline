@@ -93,6 +93,25 @@ correctly priced products with their extraction method recorded.
 
 Full report: [PHASE-2.md](PHASE-2.md).
 
+## Deployment readiness ✅
+
+Done before Phase 3 so the engine could be built on a system that is actually
+reachable, rather than retrofitted onto one afterwards.
+
+Content-Security-Policy with a per-request nonce; HSTS; rate limiting counted
+in Postgres with per-account and per-address windows; proxy-header trust as
+configuration rather than detection; the `/api/assets/*` route
+`StorageProvider.urlFor()` had been pointing at since Phase 1; the scheduled
+worker endpoint that makes a queued scan run on a host with no always-on
+process; expired-session and rate-limit housekeeping; a container image; and
+GitHub Actions for CI and for driving the queue.
+
+Verified by 25 checks against `next start` with a production environment —
+including that rotating `X-Forwarded-For` does not buy a fresh rate-limit
+bucket, and that two responses never share a CSP nonce.
+
+See [DEPLOY.md](DEPLOY.md).
+
 ## Phase 3 — AI marketing engine
 
 The `AIProvider` interface and its free `ai.local` implementation already

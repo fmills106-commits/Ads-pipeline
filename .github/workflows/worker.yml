@@ -1,0 +1,55 @@
+name: Scheduled worker
+
+# Drains the job queue on a deployment that has no always-on process.
+#
+# A serverless host gives the application nowhere to keep a worker running, so
+# something outside it has to say "go". This workflow is that something: it
+# calls the authenticated cron endpoint, which claims queued jobs, returns any
+# orphaned by a killed invocation, and clears expired sessions and rate-limit
+# counters.
+#
+# Nothing here touches the database directly — it makes one HTTPS request — so
+# no database credentials are exposed to CI.
+#
+# GitHub's scheduler is best-effort and can run late under load, so treat this
+# as "within a few minutes", not a clock. If a deployment needs work picked up
+# in seconds, run `npm run worker` on a host that allows a long-lived process
+# instead; see docs/DEPLOY.md.
+
+on:
+  schedule:
+    # Every five minutes, the finest granularity GitHub accepts.
+    - cron: '*/5 * * * *'
+  # So a queue can be drained on demand without waiting for the schedule.
+  workflow_dispatch:
+
+# Never let two drains overlap: both would try to claim the same jobs, and
+# while SKIP LOCKED makes that safe, it is wasted work.
+concurrency:
+  group: scheduled-worker
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Drain the queue
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APP_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "APP_URL variable or CRON_SECRET secret is not set; nothing to call." >&2
+            exit 1
+          fi
+
+          # `--fail-with-body` so an error response is both visible in the log
+          # and a non-zero exit, rather than a silent 401 that looks like success.
+          curl --fail-with-body --silent --show-error \
+            --max-time 300 \
+            --retry 2 --retry-delay 10 --retry-connrefused \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_URL%/}/api/cron/worker"

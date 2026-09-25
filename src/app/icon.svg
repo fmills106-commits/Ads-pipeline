@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Ads Engine">
+  <rect width="32" height="32" rx="7" fill="#4f46e5" />
+  <!-- A rising trend line: the one thing the product is for. -->
+  <path
+    d="M7 22.5 L13 16 L18 19.5 L25.5 10.5"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="2.75"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="25.5" cy="10.5" r="2.75" fill="#ffffff" />
+</svg>

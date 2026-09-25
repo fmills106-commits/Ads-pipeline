@@ -837,3 +837,23 @@ model ProductFact {
   @@index([productId, key])
   @@map("product_facts")
 }
+
+/// A fixed-window rate-limit counter.
+///
+/// In the database rather than in memory because a serverless deployment has
+/// no shared memory between invocations, and in the database rather than Redis
+/// because that would be a second datastore — and a paid one — to serve one
+/// table. Rows are disposable: losing them re-opens a window, it does not
+/// corrupt anything.
+model RateLimit {
+  /// `<action>:<subject>`, e.g. `login:203.0.113.4` or `scan:<businessId>`.
+  key         String   @id
+  /// Start of the window this count belongs to, truncated to the window size.
+  windowStart DateTime
+  count       Int      @default(0)
+  /// When this row stops being useful, so housekeeping can delete it.
+  expiresAt   DateTime
+
+  @@index([expiresAt])
+  @@map("rate_limits")
+}

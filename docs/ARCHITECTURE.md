@@ -35,13 +35,17 @@ answer is no, the local implementation wins.
 ## 3. Layering
 
 ```
+src/middleware.ts   Per-request CSP with a fresh nonce. The only code that runs
+                    before routing, which is why the policy lives here.
+
 src/app/            Next.js routes — thin. Pages resolve context; routes call services.
   (auth)/           Sign-in and registration
   (app)/            The authenticated shell
   api/              Route handlers, all wrapped by src/server/api/handler.ts
 
 src/server/         All logic that touches the database or an external system.
-  api/              The single route wrapper: validation, auth, logging, error mapping
+  api/              The single route wrapper: validation, auth, rate limiting,
+                    logging, error mapping. Plus the proxy-trust decision.
   auth/             Password hashing, sessions, registration and login
   tenancy/          Tenant context and the access guards
   business/         Business CRUD, onboarding, pause-everything
@@ -242,6 +246,37 @@ The only exemption is `UrlPolicy { allowedPrivateHosts }`, a **function
 argument with no configuration path**, so a test can reach a fixture on
 loopback without any deployment being able to turn the guard off.
 
+**Rate limiting.** Fixed windows counted in Postgres (`rate_limits`), because a
+serverless deployment shares no memory between invocations and Redis would be a
+second datastore — a paid one — to serve one table. Counting happens in a single
+`INSERT … ON CONFLICT DO UPDATE`, so two concurrent requests cannot both read
+the same count and both decide they are under the limit. Limits are per account
+where a session exists and per address otherwise: 10 logins per 15 minutes, 5
+registrations per hour, 10 scans per hour per business (that one protects the
+merchant's server as much as ours), and a 300/minute backstop on everything
+else. The limiter fails **open** on a database error and logs loudly — losing
+one control beats refusing every request — and that is the only place in the
+codebase where that trade is made.
+
+**Which address to believe.** `TRUSTED_PROXY` names the reverse proxy in front
+of the deployment, and only that proxy's header is read: `CF-Connecting-IP` for
+Cloudflare, `X-Real-IP` for Vercel. Trust is configured, never detected,
+because `X-Forwarded-For` arrives from the open internet and anyone can set it
+— a limiter keyed on it would be defeated by rotating a header. The default,
+`none`, reads no proxy header at all and counts every anonymous caller
+together: blunt, and the safe failure.
+
+**Content-Security-Policy.** Set in middleware with a per-request nonce, since
+Next.js injects inline bootstrap scripts and a static policy could only permit
+them with `unsafe-inline`. `script-src` gets the strict treatment — a nonce
+plus `strict-dynamic`, no host allow-list to bypass — because this application
+stores arbitrary text scraped from strangers' sites, which is exactly the input
+that turns a rendering bug into account takeover. `connect-src 'self'` matters
+as much: a successful injection still has nowhere to send what it read.
+`style-src` keeps `'unsafe-inline'`, because React sets style attributes and
+inline CSS is a far smaller problem than inline script; shipping a policy so
+strict it broke the app would be worse than shipping an honest one.
+
 **Logging.** The logger redacts any key matching a secret pattern at any nesting
 depth, truncates long strings, and bounds recursion depth — scraped page text is
 unbounded and may be adversarial.
@@ -276,3 +311,32 @@ campaign ceiling.
   performance snapshots accumulate.
 - API responses are `{ data }` or `{ error: { code, message } }`, always with an
   `x-request-id` header.
+
+## 12. Running it somewhere
+
+The application needs a Node runtime with DNS, `node:crypto`'s `scrypt`, and
+outbound sockets. That rules out Cloudflare Workers — there is no DNS API
+there, and the scanner's post-DNS SSRF gate cannot be written without one, so
+deploying to Workers would mean deleting a security control rather than porting
+it. [DEPLOY.md](DEPLOY.md) has the details and the recommended combination.
+
+**Background work is the part that needs a decision.** A queued scan does
+nothing until something runs it, and there are two shapes:
+
+| Shape              | How                                       | Latency           | Where                        |
+| ------------------ | ----------------------------------------- | ----------------- | ---------------------------- |
+| Long-lived process | `npm run worker`                          | ~2s               | Container, VPS, Fly.io       |
+| Scheduled drain    | `GET /api/cron/worker` with `CRON_SECRET` | schedule interval | Vercel + GitHub Actions cron |
+
+The scheduled path is what makes a serverless deployment work at all, and it
+carries one constraint worth stating plainly: `WORKER_MAX_RUN_MS` must be below
+the platform's function timeout. The crawl derives its own ceiling from it and
+stops itself, so a scan that runs out of time reports `PARTIAL` with the pages
+it did read. Set it too high and the invocation is killed mid-crawl instead,
+and the whole attempt is repeated on the next schedule — the same work, twice,
+forever.
+
+The same endpoint owns the housekeeping that nothing else was calling: expired
+sessions and spent rate-limit counters. Both leak rows rather than break
+anything, which is precisely why they needed a scheduled owner rather than a
+place in a hot path.

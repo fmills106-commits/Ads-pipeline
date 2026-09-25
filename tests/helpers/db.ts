@@ -13,25 +13,39 @@ import { slugify } from '@/lib/slug';
  */
 
 /** Wipes every table. Call in `beforeEach` so each test starts from empty. */
+/**
+ * Empties every application table.
+ *
+ * The tables are discovered from the catalogue rather than listed here. An
+ * earlier version named them explicitly, with a comment warning that a future
+ * table reachable by no foreign key would silently leak rows between tests —
+ * and then `rate_limits` was added, which is reachable by none, and it did
+ * exactly that: counters survived `beforeEach` and the first request of each
+ * test arrived already over its limit.
+ *
+ * A list that has to be kept in step with the schema is a list that will
+ * drift. Asking Postgres cannot.
+ */
+let cachedTables: string[] | null = null;
+
 export async function resetDatabase(): Promise<void> {
-  // Order matters only in that TRUNCATE ... CASCADE handles the FKs for us.
-  // Every table is named explicitly rather than leaning on CASCADE to reach
-  // them: CASCADE would do it today, but a future table with no FK path would
-  // silently start leaking rows between tests.
-  await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE
-      activity_events,
-      cost_records,
-      provider_settings,
-      audit_logs,
-      jobs,
-      sessions,
-      workspace_memberships,
-      businesses,
-      workspaces,
-      users
-    RESTART IDENTITY CASCADE
-  `);
+  if (!cachedTables) {
+    const rows = await prisma.$queryRaw<Array<{ tablename: string }>>`
+      SELECT tablename
+      FROM pg_tables
+      WHERE schemaname = 'public'
+        AND tablename <> '_prisma_migrations'
+    `;
+    cachedTables = rows.map((row) => `"${row.tablename}"`);
+  }
+
+  if (cachedTables.length === 0) return;
+
+  // CASCADE resolves the foreign keys; naming every table means nothing is
+  // reached only by accident.
+  await prisma.$executeRawUnsafe(
+    `TRUNCATE TABLE ${cachedTables.join(', ')} RESTART IDENTITY CASCADE`,
+  );
 }
 
 /** A fast scrypt cost, for tests only. Production parameters are 128x heavier. */

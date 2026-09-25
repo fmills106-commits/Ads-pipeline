@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { getEnv } from '@/lib/env';
 import { AppError, toAppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { AUDIT_ACTIONS, recordAudit } from '@/server/audit/log';
@@ -80,6 +81,15 @@ export async function runWebsiteScanJob(rawPayload: unknown): Promise<Prisma.Inp
           startUrl: payload.requestedUrl,
           fetcher,
           log,
+          /*
+           * Never plan to run longer than the invocation is allowed to live.
+           * On a host that kills functions at a fixed timeout, a crawl that
+           * overruns is killed mid-page and the whole attempt is repeated;
+           * stopping ourselves first means the scan reports PARTIAL with the
+           * pages it did read, which is accurate and useful, and a rescan
+           * continues from a warm content-hash cache.
+           */
+          limits: { maxDurationMs: crawlBudgetMs() },
           // Re-read on every page so pressing "Pause everything" mid-crawl
           // stops it within one page rather than at the end.
           shouldStop: async () => {
@@ -211,6 +221,19 @@ export async function runWebsiteScanJob(rawPayload: unknown): Promise<Prisma.Inp
 
     throw error;
   }
+}
+
+/**
+ * How long a single crawl may run.
+ *
+ * Derived from the worker's own budget rather than configured separately, so
+ * there is one number to set per host and no way for the two to disagree. The
+ * margin leaves room for persisting what was found: being killed after the
+ * crawl but before the write would lose the whole scan.
+ */
+function crawlBudgetMs(): number {
+  const budget = getEnv().WORKER_MAX_RUN_MS;
+  return Math.max(10_000, Math.floor(budget * 0.8));
 }
 
 /**

@@ -1,0 +1,10 @@
+# This is a private application, not a website to be indexed. Every useful
+# page is behind a sign-in, so a crawler can only ever reach the login form —
+# and search results pointing at someone's advertising dashboard serve nobody.
+#
+# Note the asymmetry, which is deliberate: this application obeys other
+# people's robots.txt when it scans their sites (see src/server/scanner/
+# robots.ts), so it states its own preference the same way.
+
+User-agent: *
+Disallow: /

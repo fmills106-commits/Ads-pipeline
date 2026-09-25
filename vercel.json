@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "prisma generate && next build",
+  "framework": "nextjs",
+  "functions": {
+    "src/app/api/cron/worker/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/businesses/[businessId]/scan/route.ts": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/worker",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}

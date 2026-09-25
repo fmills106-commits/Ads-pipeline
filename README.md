@@ -65,6 +65,23 @@ live — running entirely on local providers. The worker is optional in
 development: the dev server drains the queue in-process, so pressing "Read my
 website" works without it.
 
+## Putting it online
+
+It runs on free tiers — Vercel for the app, Neon for Postgres, GitHub Actions
+for CI and for draining the job queue. The only real cost is the domain, about
+$10–15 a year at Cloudflare Registrar. No credit card is needed for the rest.
+
+One step in [docs/DEPLOY.md](docs/DEPLOY.md) is easy to skip and breaks
+everything quietly: **something has to drive the job queue.** A serverless host
+has nowhere to keep a worker process, so a queued scan sits untouched and the
+app looks broken while being perfectly healthy. The repository ships a GitHub
+Actions workflow that handles it; it needs two values set.
+
+Cloudflare Workers is not an option for the app itself, and the reason is
+worth knowing: Workers have no DNS API, and the scanner's second SSRF gate
+resolves a hostname and inspects every address behind it before opening a
+socket. Porting to Workers would mean deleting that check.
+
 ## Verification
 
 ```bash
@@ -73,6 +90,10 @@ npm run test:unit             # no external services needed
 npm run test:db               # needs PostgreSQL; uses .env.test
 ./scripts/smoke.sh            # end-to-end over HTTP, against a running dev server
 ```
+
+GitHub Actions runs `verify` plus a production build on every push, against a
+real PostgreSQL service, and checks that the migrations still match
+`schema.prisma`.
 
 The suite runs at $0 by construction — `.env.test` holds no credential for any
 paid service.
@@ -88,6 +109,7 @@ paid service.
 | [docs/PHASES.md](docs/PHASES.md)             | The ten-phase plan and the definition of done                     |
 | [docs/PHASE-1.md](docs/PHASE-1.md)           | Phase 1 report: built, verified, and what remains                 |
 | [docs/PHASE-2.md](docs/PHASE-2.md)           | Phase 2 report: the website scanner, and the SSRF bypass it fixed |
+| [docs/DEPLOY.md](docs/DEPLOY.md)             | Putting it on a domain: Neon, Vercel, Cloudflare, and the worker  |
 
 ## What is structural, not advisory
 

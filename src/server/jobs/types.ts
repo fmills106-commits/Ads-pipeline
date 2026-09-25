@@ -37,7 +37,13 @@ export type JobPayloads = {
  *
  * A crawl is bounded by its own page and time limits; the lease here only
  * exists so a worker killed mid-job does not leave the row RUNNING forever.
+ *
+ * Five minutes, not ten: a crawl's own ceiling is four, so anything past five
+ * is genuinely dead rather than slow. The difference matters on a serverless
+ * host, where an invocation killed at its function timeout would otherwise
+ * strand the owner's scan for the rest of the lease with nothing happening
+ * and no explanation.
  */
 export const JOB_LIMITS: Record<JobType, { maxAttempts: number; leaseMs: number }> = {
-  [JOB_TYPES.websiteScan]: { maxAttempts: 3, leaseMs: 10 * 60 * 1000 },
+  [JOB_TYPES.websiteScan]: { maxAttempts: 3, leaseMs: 5 * 60 * 1000 },
 };

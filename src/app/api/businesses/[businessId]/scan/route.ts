@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { validationError } from '@/lib/errors';
 import { route } from '@/server/api/handler';
+import { RATE_LIMITS } from '@/server/api/rate-limit';
 import { getScanStatus, startScan } from '@/server/scanner/service';
 import { registerScannerJobs } from '@/server/scanner/job';
 import { kickQueue } from '@/server/jobs/worker';
@@ -18,25 +19,28 @@ const startSchema = z.object({
 });
 
 /** POST /api/businesses/:businessId/scan — queue a scan. */
-export const POST = route({ schema: startSchema }, async ({ body, params, user }) => {
-  const businessId = params.businessId;
-  if (typeof businessId !== 'string') throw validationError('businessId is required');
+export const POST = route(
+  { schema: startSchema, rateLimit: RATE_LIMITS.scan },
+  async ({ body, params, user }) => {
+    const businessId = params.businessId;
+    if (typeof businessId !== 'string') throw validationError('businessId is required');
 
-  const context = await requireBusinessContext(user, businessId, { minimumRole: 'MEMBER' });
-  const result = await startScan(context, body.url === undefined ? {} : { url: body.url });
+    const context = await requireBusinessContext(user, businessId, { minimumRole: 'MEMBER' });
+    const result = await startScan(context, body.url === undefined ? {} : { url: body.url });
 
-  // Best-effort: starts the work now in single-process deployments. Production
-  // runs a dedicated worker, which would pick this up regardless.
-  kickQueue([JOB_TYPES.websiteScan]);
+    // Best-effort: starts the work now in single-process deployments. Production
+    // runs a dedicated worker, which would pick this up regardless.
+    kickQueue([JOB_TYPES.websiteScan]);
 
-  return {
-    scanRunId: result.scanRun.id,
-    jobId: result.jobId,
-    status: result.scanRun.status,
-    requestedUrl: result.scanRun.requestedUrl,
-    alreadyRunning: !result.created,
-  };
-});
+    return {
+      scanRunId: result.scanRun.id,
+      jobId: result.jobId,
+      status: result.scanRun.status,
+      requestedUrl: result.scanRun.requestedUrl,
+      alreadyRunning: !result.created,
+    };
+  },
+);
 
 /** GET /api/businesses/:businessId/scan — poll the latest scan. */
 export const GET = route({}, async ({ params, user }) => {

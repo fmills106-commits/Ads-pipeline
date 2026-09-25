@@ -245,14 +245,22 @@ export async function getJob(jobId: string, db: Db = prisma): Promise<Job | null
   return db.job.findUnique({ where: { id: jobId } });
 }
 
-/** Pending + running count, for the UI and for tests. */
+/**
+ * Pending + running count, for the UI and for tests.
+ *
+ * Omitting `workspaceId` counts every tenant, which is what an operational
+ * health check wants. That total is not tenant data, but it is still not
+ * public: the only caller without a workspace is the authenticated cron
+ * endpoint.
+ */
 export async function queueDepth(
-  workspaceId: string,
+  workspaceId?: string,
   db: Db = prisma,
 ): Promise<{ pending: number; running: number }> {
+  const scope = workspaceId === undefined ? {} : { workspaceId };
   const [pending, running] = await Promise.all([
-    db.job.count({ where: { workspaceId, status: 'PENDING' } }),
-    db.job.count({ where: { workspaceId, status: 'RUNNING' } }),
+    db.job.count({ where: { ...scope, status: 'PENDING' } }),
+    db.job.count({ where: { ...scope, status: 'RUNNING' } }),
   ]);
   return { pending, running };
 }

@@ -62,7 +62,18 @@ describe('ZERO_COST_MODE', () => {
   it('is allowed in production — simulated advertising is a legitimate deployment', () => {
     // Earlier this was refused. It should not be: a self-hosted install running
     // entirely on free providers is exactly what this product is meant to allow.
-    expect(() => parseEnv({ ...valid, NODE_ENV: 'production' })).not.toThrow();
+    // The other values here are what *any* production deployment needs (see
+    // "production requirements" below); zero-cost mode adds no requirements
+    // of its own, which is the point being asserted.
+    expect(() =>
+      parseEnv({
+        ...valid,
+        NODE_ENV: 'production',
+        APP_URL: 'https://ads.example.com',
+        CRON_SECRET: 'c'.repeat(32),
+        ZERO_COST_MODE: 'true',
+      }),
+    ).not.toThrow();
   });
 });
 
@@ -163,5 +174,72 @@ describe('advertising ceilings', () => {
         MAX_CAMPAIGN_BUDGET_CENTS: '10000',
       }),
     ).toThrow(/cannot exceed MAX_CAMPAIGN_BUDGET_CENTS/);
+  });
+});
+
+/**
+ * Configuration that is optional locally and load-bearing in production.
+ *
+ * Each of these has a failure mode that is silent and expensive to discover:
+ * cookies sent over plain HTTP, a queue nothing ever drains, logs nothing can
+ * parse. Boot is the only good place to catch them.
+ */
+describe('production requirements', () => {
+  const production = {
+    ...valid,
+    NODE_ENV: 'production',
+    APP_URL: 'https://ads.example.com',
+    CRON_SECRET: 'c'.repeat(32),
+    LOG_FORMAT: 'json',
+  } satisfies NodeJS.ProcessEnv;
+
+  it('accepts a complete production configuration', () => {
+    expect(() => parseEnv(production)).not.toThrow();
+  });
+
+  it('refuses plain HTTP, because session cookies would not be secure', () => {
+    expect(() => parseEnv({ ...production, APP_URL: 'http://ads.example.com' })).toThrow(
+      /must be https/,
+    );
+  });
+
+  it('refuses a missing cron secret, because nothing would drain the queue', () => {
+    const { CRON_SECRET: _omitted, ...withoutSecret } = production;
+    expect(() => parseEnv(withoutSecret)).toThrow(/CRON_SECRET/);
+  });
+
+  it('refuses a cron secret too short to be worth having', () => {
+    expect(() => parseEnv({ ...production, CRON_SECRET: 'short' })).toThrow();
+  });
+
+  it('refuses pretty logs, which no log aggregator can read', () => {
+    expect(() => parseEnv({ ...production, LOG_FORMAT: 'pretty' })).toThrow(/must be json/);
+  });
+
+  it('still allows all of it to be absent outside production', () => {
+    // The point of the whole exercise: cloning the repo and running it must
+    // not require any of this.
+    expect(() => parseEnv(valid)).not.toThrow();
+  });
+
+  it('skips the checks during a production build', () => {
+    // `next build` sets NODE_ENV=production while compiling. A build reads
+    // pages rather than serving them, so requiring a real session secret to
+    // produce a bundle would mean nobody could build without production
+    // credentials — including Vercel and the Dockerfile, which build first.
+    expect(() =>
+      parseEnv({ ...valid, NODE_ENV: 'production', NEXT_PHASE: 'phase-production-build' }),
+    ).not.toThrow();
+  });
+});
+
+describe('proxy trust', () => {
+  it('trusts nothing by default', () => {
+    expect(parseEnv(valid).TRUSTED_PROXY).toBe('none');
+  });
+
+  it('rejects a proxy name it has no header mapping for', () => {
+    // Silently falling back to "none" would look configured and do nothing.
+    expect(() => parseEnv({ ...valid, TRUSTED_PROXY: 'nginx' })).toThrow();
   });
 });
