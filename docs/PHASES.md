@@ -13,7 +13,7 @@ the integration works.
 | ----- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
 | 1     | Foundation — TypeScript, database, auth, tenancy, UI shell, config, logging, errors                               | ✅ **Complete** |
 | 2     | Business onboarding — website scanner, sitemap discovery, page extraction, structured facts, product discovery    | ✅ **Complete** |
-| 3     | AI marketing engine — business/product analysis, strategies, audience hypotheses, offer engine, ad copy           | Planned         |
+| 3     | AI marketing engine — business/product analysis, strategies, audience hypotheses, offer engine, ad copy           | ✅ **Complete** |
 | 4     | Creative engine — templates, image provider, generation, QA, versioning, approval                                 | Planned         |
 | 5     | Campaign engine — builder, ad sets, ads, budget controls, mock advertising provider                               | Planned         |
 | 6     | Meta integration — OAuth, account selection, campaign creation, creative upload, publishing, insights sync        | Planned         |
@@ -130,6 +130,36 @@ unknown; ad copy with the prohibited-claims list enforced.
 The prompt-injection mechanism shipped in Phase 2; this phase is where it
 starts doing work. Scraped content enters prompts as delimited data, never as
 instruction.
+
+## Phase 3 — AI marketing engine ✅
+
+Delivered: one guarded path every AI call goes through, with output validated
+against a Zod schema and a bounded repair-then-fail retry; business analysis
+producing a profile and audience hypotheses from verified facts; marketing
+strategies carrying assumptions and testing variables instead of an invented
+score; the offer engine; ad copy with a claim checker; and the `/ads` page
+where inferences are visibly distinct from the facts on `/website`.
+
+Runs entirely on the free `ai.local` provider, which marks its output
+simulated — and the UI leads with that rather than burying it.
+
+Two properties are structural rather than promised:
+
+- **Inferences cannot become facts.** `ai_inferences` and `business_facts` are
+  written by different modules, and no operation moves a row between them.
+- **Copy cannot claim what the site does not say.** The checker matches
+  assertions against verified evidence rather than scanning for bad words, so
+  an unstated price or an unbacked discount is rejected before storage. A
+  rejected draft is reported to the owner, not silently dropped.
+
+The offer engine contains no AI call at all: choosing which offer suits a
+product is judgement, but every number is arithmetic, and arithmetic a model
+performs is arithmetic nobody checked.
+
+Verified: 489 automated tests, clean build, and the whole engine driven
+through a real browser with zero console errors.
+
+Full report: [PHASE-3.md](PHASE-3.md).
 
 ## Phase 4 — Creative engine
 

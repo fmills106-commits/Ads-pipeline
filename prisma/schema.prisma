@@ -213,6 +213,15 @@ model Business {
   products       Product[]
   businessFacts  BusinessFact[]
 
+  // Phase 3 — the marketing engine
+  profile     BusinessProfile?
+  inferences  AiInference[]
+  strategies  MarketingStrategy[]
+  offers      Offer[]
+  offerRules  OfferRules?
+  adCopies    AdCopy[]
+  aiDecisions AiDecision[]
+
   @@unique([workspaceId, name])
   @@index([workspaceId])
   @@index([workspaceId, archivedAt])
@@ -706,9 +715,12 @@ model Product {
   /// to know it went away.
   removedAt   DateTime?
 
-  images   ProductImage[]
-  versions ProductVersion[]
-  facts    ProductFact[]
+  images              ProductImage[]
+  versions            ProductVersion[]
+  facts               ProductFact[]
+  marketingStrategies MarketingStrategy[]
+  offers              Offer[]
+  adCopies            AdCopy[]
 
   @@unique([websiteId, productUrl])
   @@index([businessId, removedAt])
@@ -856,4 +868,335 @@ model RateLimit {
 
   @@index([expiresAt])
   @@map("rate_limits")
+}
+
+// -----------------------------------------------------------------------------
+// Phase 3 — the marketing engine
+//
+// The organising rule of this section: what a model concluded is kept in
+// different tables from what was read off a merchant's own website, and there
+// is no operation that moves a row from the second kind to the first. See
+// `AiInference` below.
+// -----------------------------------------------------------------------------
+
+/// What the engine decided, and on what evidence.
+///
+/// One row per AI call that produced something durable. `reasoningSummary` is a
+/// short explanation meant to be shown to the owner — deliberately NOT stored
+/// chain-of-thought, which would be both unreliable and unreadable.
+///
+/// Every generated artefact points back here, so "why does my ad say that?" is
+/// answerable months later, including which provider produced it and whether
+/// the output was simulated.
+model AiDecision {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  /// e.g. `business.analyse`, `strategy.generate`, `offer.propose`.
+  kind String
+
+  /// What went in, in one line. Not the whole prompt.
+  inputSummary     String
+  /// Why this came out, in the owner's language.
+  reasoningSummary String
+  /// The validated payload, kept so a result can be re-rendered or audited.
+  output           Json
+
+  /// `low` | `medium` | `high`. How much to trust this.
+  uncertainty String @default("medium")
+
+  /// Ids of the verified facts this was built from — the evidence trail.
+  factIds String[]
+
+  /// Which implementation produced it, and whether it was a real model.
+  providerKey String
+  model       String?
+  simulated   Boolean @default(true)
+
+  promptTokens       Int?
+  completionTokens   Int?
+  estimatedCostCents Int  @default(0)
+
+  createdAt DateTime @default(now())
+
+  inferences AiInference[]
+  strategies MarketingStrategy[]
+  offers     Offer[]
+  adCopies   AdCopy[]
+  profiles   BusinessProfile[]
+
+  @@index([businessId, createdAt])
+  @@index([businessId, kind])
+  @@map("ai_decisions")
+}
+
+/// The model's standing understanding of a business.
+///
+/// Distinct from `business_facts`: nothing here is quoted from the website, it
+/// is a reading of it. Regenerated wholesale rather than edited, so it always
+/// corresponds to one decision.
+model BusinessProfile {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @unique @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  valueProposition String
+  brandVoice       String
+  /// Words and claims this merchant does not want used. Enforced on ad copy.
+  restrictions     String[]
+
+  aiDecisionId String?     @db.Uuid
+  aiDecision   AiDecision? @relation(fields: [aiDecisionId], references: [id], onDelete: SetNull)
+
+  generatedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("business_profiles")
+}
+
+enum InferenceKind {
+  AUDIENCE_HYPOTHESIS
+  MOTIVATION
+  OBJECTION
+  USE_CASE
+  SEASONAL_OPPORTUNITY
+}
+
+/// How sure the engine is. Three words, not a number — a decimal here would
+/// imply a precision that does not exist.
+enum Uncertainty {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+/// Everything the model concluded rather than read.
+///
+/// The counterpart to `business_facts` / `product_facts`, and deliberately a
+/// separate table. A fact carries a source URL and an extraction method; an
+/// inference carries reasoning and an uncertainty, and can cite the facts it
+/// was built from. The UI renders the two differently and nothing promotes an
+/// inference into a fact — that separation is the whole point of §"distinguish
+/// verified information from AI inference".
+model AiInference {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  /// Optional narrower subject, e.g. a product this is about.
+  subjectType String?
+  subjectId   String? @db.Uuid
+
+  kind      InferenceKind
+  statement String
+  reasoning String
+
+  uncertainty Uncertainty @default(MEDIUM)
+
+  /// `business_facts` / `product_facts` ids this was reasoned from. May be
+  /// empty, which is itself informative: a conclusion drawn from nothing.
+  supportingFactIds String[]
+
+  aiDecisionId String?     @db.Uuid
+  aiDecision   AiDecision? @relation(fields: [aiDecisionId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([businessId, kind])
+  @@index([businessId, createdAt])
+  @@map("ai_inferences")
+}
+
+enum StrategyAngle {
+  PROBLEM_SOLUTION
+  BENEFIT
+  DEMONSTRATION
+  LIFESTYLE
+  SEASONAL
+  GIFT
+  VALUE
+  SOCIAL_PROOF
+  URGENCY
+  EDUCATIONAL
+  COMPARISON
+}
+
+/// One way of advertising something, with its reasoning exposed.
+///
+/// Note what is absent: any numeric quality score. A model cannot know in
+/// advance which angle will work, and a "0.82" would invite treating a guess
+/// as a measurement. What it can offer is a hypothesis, the assumptions behind
+/// it, and the variables worth testing — which is what Phase 8's experiments
+/// then actually measure.
+model MarketingStrategy {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  productId  String?  @db.Uuid
+  product    Product? @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  angle        StrategyAngle
+  hypothesis   String
+  hook         String
+  suggestedCta String
+
+  /// What has to be true for this to work. Stated so it can be checked.
+  assumptions      String[]
+  /// What an experiment should vary to test it.
+  testingVariables String[]
+
+  aiDecisionId String?     @db.Uuid
+  aiDecision   AiDecision? @relation(fields: [aiDecisionId], references: [id], onDelete: SetNull)
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  adCopies AdCopy[]
+
+  @@index([businessId, createdAt])
+  @@index([productId])
+  @@map("marketing_strategies")
+}
+
+enum OfferType {
+  PERCENT_OFF
+  FIXED_OFF
+  BXGY
+  BUNDLE
+  FREE_SHIPPING
+  SEASONAL
+}
+
+enum OfferStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+  ACTIVE
+  EXPIRED
+}
+
+/// Per-business merchant constraints on what may be offered.
+///
+/// The engine proposes within these and cannot argue with them. Absent a row,
+/// the defaults here are deliberately conservative: a modest ceiling, and
+/// approval required, so a business that never opens this screen cannot have a
+/// discount published on its behalf.
+model OfferRules {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @unique @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  maxDiscountPercent Int  @default(20)
+  minDiscountPercent Int  @default(5)
+  /// When set, an offer that would take margin below this is never proposed.
+  /// Only meaningful where the merchant supplied a cost.
+  minMarginPercent   Int?
+
+  allowPercentage   Boolean @default(true)
+  allowFixed        Boolean @default(true)
+  allowBundles      Boolean @default(false)
+  allowFreeShipping Boolean @default(true)
+  allowSeasonal     Boolean @default(true)
+
+  /// Whether an offer may become active without a person saying yes.
+  allowAutomatic  Boolean @default(false)
+  requireApproval Boolean @default(true)
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@map("offer_rules")
+}
+
+/// A proposed or live promotion.
+///
+/// `marginKnown` is the important column. The engine is forbidden from
+/// inventing a cost price, so when the merchant has not supplied one the
+/// margin is recorded as *unavailable* rather than estimated — and the UI says
+/// so. An invented margin would be a number someone might discount against.
+model Offer {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  productId  String?  @db.Uuid
+  product    Product? @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  type  OfferType
+  /// Percent for PERCENT_OFF, minor units for FIXED_OFF, unused otherwise.
+  value Int?
+
+  /// What the customer would pay. Null when it cannot be computed from a
+  /// price the website actually states.
+  resultingPriceCents Int?
+
+  /// False means "the merchant never told us what this costs them".
+  marginKnown          Boolean @default(false)
+  estimatedMarginCents Int?
+
+  rationale String
+  status    OfferStatus @default(PROPOSED)
+
+  approvedBy String?   @db.Uuid
+  approvedAt DateTime?
+  startsAt   DateTime?
+  endsAt     DateTime?
+
+  aiDecisionId String?     @db.Uuid
+  aiDecision   AiDecision? @relation(fields: [aiDecisionId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adCopies AdCopy[]
+
+  @@index([businessId, status])
+  @@index([productId])
+  @@map("offers")
+}
+
+enum AdCopyStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+/// Ad text for one product, under one strategy.
+///
+/// Assembled from verified product facts and, where present, an offer that has
+/// been approved — never from the model's recollection of the product. The
+/// claim checker runs before anything reaches this table.
+model AdCopy {
+  id         String   @id @default(uuid()) @db.Uuid
+  businessId String   @db.Uuid
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  productId  String   @db.Uuid
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  strategyId String            @db.Uuid
+  strategy   MarketingStrategy @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+
+  offerId String? @db.Uuid
+  offer   Offer?  @relation(fields: [offerId], references: [id], onDelete: SetNull)
+
+  primaryText  String
+  headline     String
+  description  String
+  cta          String
+  /// e.g. `A`, `B` — which variant of a test this is.
+  variantLabel String
+
+  status AdCopyStatus @default(DRAFT)
+
+  aiDecisionId String?     @db.Uuid
+  aiDecision   AiDecision? @relation(fields: [aiDecisionId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([businessId, status])
+  @@index([productId])
+  @@index([strategyId])
+  @@map("ad_copies")
 }

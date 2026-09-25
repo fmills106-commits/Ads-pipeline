@@ -28,7 +28,9 @@ import type { BusinessContext } from '@/server/tenancy/context';
 export const ACTIVITY_KINDS = {
   websiteScanned: { icon: '🔍', severity: 'INFO' },
   productsFound: { icon: '📦', severity: 'INFO' },
+  analysisReady: { icon: '🧠', severity: 'INFO' },
   strategiesGenerated: { icon: '🤖', severity: 'INFO' },
+  adCopyReady: { icon: '✍️', severity: 'INFO' },
   creativesGenerated: { icon: '🎨', severity: 'INFO' },
   creativeNeedsReview: { icon: '👀', severity: 'ATTENTION' },
   offerProposed: { icon: '🏷️', severity: 'ATTENTION' },

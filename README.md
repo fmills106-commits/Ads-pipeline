@@ -27,7 +27,7 @@ See [docs/ZERO-COST.md](docs/ZERO-COST.md).
 
 ## Status
 
-**Phases 1 and 2 complete and verified** — the foundation, the zero-cost
+**Phases 1–3 complete and verified** — the foundation, the zero-cost
 provider architecture, the simplified interface, and the website scanner. See
 [docs/PHASES.md](docs/PHASES.md) for the plan, and the
 [Phase 1](docs/PHASE-1.md) and [Phase 2](docs/PHASE-2.md) reports for what was
@@ -39,9 +39,14 @@ came from and how it was extracted. It has been run against real shops, both
 with and without structured data; doing that found four extraction bugs no
 fixture had caught, all fixed and covered by tests.
 
-The AI marketing engine, creative generation and Meta integration arrive in
-Phases 3–6. The seams they plug into exist now, each with its free
-implementation already in place.
+It also reads that back: what the business seems to sell, who might want it,
+ways to advertise each product, suggested offers, and ad text — with every
+conclusion badged as a conclusion, and every claim checked against what the
+site actually says. That runs on the free built-in generator today, which
+marks its own output as a placeholder rather than passing it off as advice.
+
+Creative generation and Meta integration arrive in Phases 4–6. The seams they
+plug into exist now, each with its free implementation already in place.
 
 ## Quick start
 
@@ -109,6 +114,7 @@ paid service.
 | [docs/PHASES.md](docs/PHASES.md)             | The ten-phase plan and the definition of done                     |
 | [docs/PHASE-1.md](docs/PHASE-1.md)           | Phase 1 report: built, verified, and what remains                 |
 | [docs/PHASE-2.md](docs/PHASE-2.md)           | Phase 2 report: the website scanner, and the SSRF bypass it fixed |
+| [docs/PHASE-3.md](docs/PHASE-3.md)           | Phase 3 report: the marketing engine and the claim checker        |
 | [docs/DEPLOY.md](docs/DEPLOY.md)             | Putting it on a domain: Neon, Vercel, Cloudflare, and the worker  |
 
 ## What is structural, not advisory

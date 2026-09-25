@@ -32,6 +32,9 @@ export const AUDIT_ACTIONS = {
   // later phases — declared here so the vocabulary stays in one place
   websiteScanStarted: 'website.scan_started',
   websiteScanCompleted: 'website.scan_completed',
+  businessAnalysed: 'business.analysed',
+  strategiesGenerated: 'strategy.generated',
+  adCopyGenerated: 'ad_copy.generated',
   offerProposed: 'offer.proposed',
   offerApproved: 'offer.approved',
   creativeGenerated: 'creative.generated',

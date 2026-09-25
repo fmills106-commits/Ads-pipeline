@@ -95,6 +95,16 @@ const HANDLERS: Record<string, (request: AICompletionRequest<unknown>) => unknow
 
   'copy.generate': (request) => {
     const product = request.data?.productName ?? 'this product';
+    /*
+     * Ad platforms cap a headline at 60 characters and a description at 120,
+     * and the marketing engine's schema enforces those so copy is rejected
+     * here rather than at publish time. A long product name blew straight
+     * through it — this provider is held to the same validation as a paid
+     * one, which is how that was found.
+     */
+    const short = (text: string, max: number) =>
+      text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+    const name = short(product, 48);
     // Composed strictly from supplied values: no claims, no statistics, no
     // scarcity, no superlatives. The prohibited-claims rules are satisfied by
     // construction rather than by filtering afterwards.
@@ -102,14 +112,14 @@ const HANDLERS: Record<string, (request: AICompletionRequest<unknown>) => unknow
       simulated: true,
       variants: [
         {
-          primaryText: `${product}. See the details and decide for yourself.`,
-          headline: product,
+          primaryText: short(`${product}. See the details and decide for yourself.`, 500),
+          headline: name,
           description: 'Available now.',
           cta: 'Shop now',
         },
         {
-          primaryText: `Looking at ${product}? Here is what it is.`,
-          headline: `About ${product}`,
+          primaryText: short(`Looking at ${product}? Here is what it is.`, 500),
+          headline: short(`About ${name}`, 60),
           description: 'Full details on the product page.',
           cta: 'Learn more',
         },

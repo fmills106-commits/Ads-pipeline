@@ -21,7 +21,7 @@ export interface NavItem {
 export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Overview', href: '/dashboard', available: true, phase: 1 },
   { label: 'Website', href: '/website', available: true, phase: 2 },
-  { label: 'Ads', href: '/ads', available: false, phase: 4 },
+  { label: 'Ads', href: '/ads', available: true, phase: 3 },
   { label: 'Results', href: '/results', available: false, phase: 7 },
   { label: 'Costs', href: '/costs', available: true, phase: 1 },
   { label: 'Settings', href: '/settings', available: true, phase: 1 },
