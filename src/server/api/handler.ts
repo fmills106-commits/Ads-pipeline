@@ -4,7 +4,12 @@ import { AppError, toAppError, validationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { uuid } from '@/lib/id';
 import { requireCurrentUser } from '@/server/auth/current-user';
-import { enforce, RATE_LIMITS, type RateLimitRule } from '@/server/api/rate-limit';
+import {
+  enforce,
+  RATE_LIMITS,
+  type RateLimitResult,
+  type RateLimitRule,
+} from '@/server/api/rate-limit';
 import { clientIp } from '@/server/api/request';
 import type { User } from '@prisma/client';
 
@@ -86,6 +91,12 @@ export function route<TSchema extends ZodTypeAny | undefined = undefined>(
     });
     const startedAt = Date.now();
 
+    /*
+     * Whichever rate-limit check actually ran, so its count can be reported on
+     * the way out. Undefined means no limit applied to this request.
+     */
+    let limitState: RateLimitResult | undefined;
+
     try {
       const params = (await segment?.params) ?? {};
 
@@ -97,14 +108,14 @@ export function route<TSchema extends ZodTypeAny | undefined = undefined>(
        * user rather than an address several people may share.
        */
       if (!requireAuth && rateLimit) {
-        await enforce(rateLimit, ipSubject(request));
+        limitState = await enforce(rateLimit, ipSubject(request));
       }
 
       const body = schema ? await parseBody(request, schema) : undefined;
       const user = requireAuth ? await requireCurrentUser() : undefined;
 
       if (user) {
-        await enforce(rateLimit ?? RATE_LIMITS.api, `user:${user.id}`);
+        limitState = await enforce(rateLimit ?? RATE_LIMITS.api, `user:${user.id}`);
       }
 
       const result = await handler({
@@ -117,13 +128,20 @@ export function route<TSchema extends ZodTypeAny | undefined = undefined>(
 
       log.info('Request completed', { durationMs: Date.now() - startedAt, status: 200 });
 
-      if (result instanceof NextResponse) return result;
-      if (result === undefined || result === null) {
-        return NextResponse.json({ data: null }, { headers: { 'x-request-id': requestId } });
+      const headers = { 'x-request-id': requestId, ...rateLimitHeaders(limitState) };
+
+      // A route that builds its own response — login, to set a cookie — still
+      // gets the headers, rather than being the one case that reports nothing.
+      if (result instanceof NextResponse) {
+        for (const [name, value] of Object.entries(headers)) result.headers.set(name, value);
+        return result;
       }
-      return NextResponse.json({ data: result }, { headers: { 'x-request-id': requestId } });
+      if (result === undefined || result === null) {
+        return NextResponse.json({ data: null }, { headers });
+      }
+      return NextResponse.json({ data: result }, { headers });
     } catch (thrown) {
-      return respondWithError(thrown, requestId, log, Date.now() - startedAt);
+      return respondWithError(thrown, requestId, log, Date.now() - startedAt, limitState);
     }
   };
 }
@@ -172,11 +190,34 @@ function formatZodIssues(error: ZodError): string {
   return field ? `${field}: ${first.message}` : first.message;
 }
 
+/**
+ * What the limiter counted, as response headers.
+ *
+ * The conventional `x-ratelimit-*` trio, on every answer from a limited route
+ * rather than only on a refusal. Exposing the remaining count gives an attacker
+ * nothing they could not learn by counting their own requests, and it is the
+ * only way to confirm from outside that the limiter is running at all — the
+ * alternative being to exceed a login limit in production to see whether it
+ * holds.
+ *
+ * `reset` is seconds until the window ends, not a timestamp, so it needs no
+ * clock agreement between us and the caller.
+ */
+function rateLimitHeaders(state: RateLimitResult | undefined): Record<string, string> {
+  if (!state) return {};
+  return {
+    'x-ratelimit-limit': String(state.limit),
+    'x-ratelimit-remaining': String(state.remaining),
+    'x-ratelimit-reset': String(state.retryAfterSeconds),
+  };
+}
+
 function respondWithError(
   thrown: unknown,
   requestId: string,
   log: ReturnType<typeof logger>,
   durationMs: number,
+  limitState?: RateLimitResult,
 ): NextResponse {
   const error = toAppError(thrown);
 
@@ -190,12 +231,27 @@ function respondWithError(
     error,
   });
 
-  const headers: Record<string, string> = { 'x-request-id': requestId };
+  const headers: Record<string, string> = {
+    'x-request-id': requestId,
+    ...rateLimitHeaders(limitState),
+  };
 
   // A 429 without a Retry-After leaves a client guessing, which usually means
   // retrying immediately and making the problem worse.
   const retryAfter = error.details?.['retryAfterSeconds'];
   if (typeof retryAfter === 'number') headers['retry-after'] = String(retryAfter);
+
+  /*
+   * The refusal itself is the one case `limitState` cannot describe: `enforce`
+   * throws instead of returning, so nothing was assigned. The rule's own
+   * numbers travel on the error, and none remain by definition.
+   */
+  if (error.code === 'RATE_LIMITED' && typeof retryAfter === 'number') {
+    const limit = error.details?.['limit'];
+    if (typeof limit === 'number') headers['x-ratelimit-limit'] = String(limit);
+    headers['x-ratelimit-remaining'] = '0';
+    headers['x-ratelimit-reset'] = String(retryAfter);
+  }
 
   return NextResponse.json(error.toPublicJSON(), { status: error.status, headers });
 }

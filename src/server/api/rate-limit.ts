@@ -52,6 +52,8 @@ export const RATE_LIMITS = {
 
 export interface RateLimitResult {
   allowed: boolean;
+  /** The rule's ceiling, carried so a caller can report it without the rule. */
+  limit: number;
   /** Requests left in this window, never negative. */
   remaining: number;
   /** Seconds until the window resets. */
@@ -105,11 +107,12 @@ export async function consume(
       action: rule.action,
       error: cause,
     });
-    return { allowed: true, remaining: rule.limit, retryAfterSeconds };
+    return { allowed: true, limit: rule.limit, remaining: rule.limit, retryAfterSeconds };
   }
 
   return {
     allowed: count <= rule.limit,
+    limit: rule.limit,
     remaining: Math.max(0, rule.limit - count),
     retryAfterSeconds,
   };
@@ -121,18 +124,28 @@ export async function consume(
  * `retryAfterSeconds` travels on the error's details so the route wrapper can
  * put it in a `Retry-After` header — a 429 without one tells a client nothing
  * except to guess.
+ *
+ * Returns the allowed result so the wrapper can report the count in response
+ * headers. That is not a nicety: a limiter that only speaks when it refuses is
+ * a control nobody can confirm is running. Without the headers the only way to
+ * test this from outside is to actually exceed the limit, which on a login
+ * endpoint means locking yourself out to find out.
  */
 export async function enforce(
   rule: RateLimitRule,
   subject: string,
   db: Db = prisma,
-): Promise<void> {
+): Promise<RateLimitResult> {
   const result = await consume(rule, subject, db);
-  if (result.allowed) return;
+  if (result.allowed) return result;
 
   throw new AppError('RATE_LIMITED', `Rate limit exceeded for ${rule.action}`, {
     retryable: true,
-    details: { action: rule.action, retryAfterSeconds: result.retryAfterSeconds },
+    details: {
+      action: rule.action,
+      limit: rule.limit,
+      retryAfterSeconds: result.retryAfterSeconds,
+    },
   });
 }
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '@/lib/db';
+import { route } from '@/server/api/handler';
 import {
   consume,
   enforce,
@@ -83,20 +84,78 @@ describe('consume', () => {
 });
 
 describe('enforce', () => {
-  it('is silent while under the limit', async () => {
-    await expect(enforce(rule, 's')).resolves.toBeUndefined();
+  it('reports the count while under the limit', async () => {
+    // Returned rather than swallowed, so the route wrapper can put it in
+    // response headers. A limiter that only speaks when it refuses cannot be
+    // confirmed to be running without locking somebody out to find out.
+    await expect(enforce(rule, 's')).resolves.toMatchObject({
+      allowed: true,
+      limit: 3,
+      remaining: 2,
+    });
   });
 
   it('throws RATE_LIMITED with a retry hint once over', async () => {
     for (let i = 0; i < 3; i += 1) await enforce(rule, 's');
 
     // The hint travels on the error so the route wrapper can set Retry-After;
-    // a 429 without one just invites an immediate retry.
+    // a 429 without one just invites an immediate retry. The limit travels
+    // with it, because the refusal is the one response whose headers cannot be
+    // built from a returned result.
     await expect(enforce(rule, 's')).rejects.toMatchObject({
       code: 'RATE_LIMITED',
       status: 429,
-      details: { retryAfterSeconds: expect.any(Number) },
+      details: { limit: 3, retryAfterSeconds: expect.any(Number) },
     });
+  });
+});
+
+describe('what a caller can see', () => {
+  /*
+   * The deployment check that prompted these headers: twelve login attempts
+   * against the live site all returned 401, and there was no way to tell
+   * whether the limiter had counted them or silently failed open. It had
+   * counted them — the attempts arrived from a rotating pool of addresses and
+   * landed in different buckets — but nothing in the response said so.
+   */
+  const limited = route({ requireAuth: false, rateLimit: rule }, async () => ({ ok: true }));
+
+  const call = (): Promise<Response> =>
+    limited(new Request('https://example.test/api/thing', { method: 'POST' }), {
+      params: Promise.resolve({}),
+    });
+
+  it('reports the count on a successful response', async () => {
+    const response = await call();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-ratelimit-limit')).toBe('3');
+    expect(response.headers.get('x-ratelimit-remaining')).toBe('2');
+    expect(Number(response.headers.get('x-ratelimit-reset'))).toBeGreaterThan(0);
+  });
+
+  it('counts down, then refuses with nothing remaining', async () => {
+    const remaining: Array<string | null> = [];
+    for (let i = 0; i < 3; i += 1) {
+      remaining.push((await call()).headers.get('x-ratelimit-remaining'));
+    }
+    expect(remaining).toEqual(['2', '1', '0']);
+
+    const refused = await call();
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get('x-ratelimit-remaining')).toBe('0');
+    expect(refused.headers.get('x-ratelimit-limit')).toBe('3');
+    // Without this a client's only strategy is to retry immediately.
+    expect(Number(refused.headers.get('retry-after'))).toBeGreaterThan(0);
+  });
+
+  it('says nothing on a route that has no limit', async () => {
+    const open = route({ requireAuth: false }, async () => ({ ok: true }));
+    const response = await open(new Request('https://example.test/api/open'), {
+      params: Promise.resolve({}),
+    });
+
+    expect(response.headers.get('x-ratelimit-limit')).toBeNull();
   });
 });
 
