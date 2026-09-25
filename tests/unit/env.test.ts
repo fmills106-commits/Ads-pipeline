@@ -35,6 +35,49 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ ...valid, APP_URL: 'not-a-url' })).toThrow(/APP_URL/);
   });
 
+  /*
+   * These four are what a connection string actually looks like when it has
+   * been copied out of a database provider's dashboard and typed into a
+   * hosting one. Prisma rejects them too, but it blames `schema.prisma`, so
+   * the operator goes reading the file that is not wrong.
+   */
+  it.each([
+    ["Neon's copy button, command and all", "psql 'postgresql://user:pass@host/db'"],
+    ['wrapped in quotes', "'postgresql://user:pass@host/db'"],
+    ['a leftover placeholder', '<your connection string>'],
+    ['the wrong database entirely', 'mysql://user:pass@host/db'],
+  ])('rejects a DATABASE_URL that is %s', (_why, value) => {
+    expect(() => parseEnv({ ...valid, DATABASE_URL: value })).toThrow(
+      /DATABASE_URL.*postgresql:\/\//s,
+    );
+  });
+
+  it('accepts either postgres scheme', () => {
+    for (const scheme of ['postgresql', 'postgres']) {
+      const env = parseEnv({ ...valid, DATABASE_URL: `${scheme}://user:pass@host/db` });
+      expect(env.DATABASE_URL).toContain('://user:pass@host/db');
+    }
+  });
+
+  it('holds DIRECT_URL to the same rule, but does not require it', () => {
+    expect(parseEnv(valid).DIRECT_URL).toBeUndefined();
+    expect(() => parseEnv({ ...valid, DIRECT_URL: 'not-a-connection-string' })).toThrow(
+      /DIRECT_URL/,
+    );
+  });
+
+  it('never echoes the connection string it rejected', () => {
+    const secret = 'sup3rs3cr3t-passw0rd';
+    let message = '';
+    try {
+      parseEnv({ ...valid, DATABASE_URL: `"postgresql://user:${secret}@host/db"` });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/DATABASE_URL/);
+    expect(message).not.toContain(secret);
+  });
+
   it('reports every failure at once rather than one at a time', () => {
     let message = '';
     try {

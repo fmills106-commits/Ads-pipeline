@@ -94,6 +94,14 @@ five are secrets — nothing else needs setting:
 | `ENCRYPTION_KEY` | generated above                       |
 | `CRON_SECRET`    | generated above                       |
 
+Paste each connection string on its own, starting at the `p` of
+`postgresql://`. Neon's copy button hands you a whole `psql '…'` command, and
+pasting that — or the URL with the quotes still around it — gives a build
+failure that blames `prisma/schema.prisma` rather than the variable. The build
+checks both strings before it does anything else and names whichever is wrong,
+so you get one clear line instead of `P1012`; it prints no part of the value,
+because the value contains a password.
+
 Everything else is derived from what Vercel tells the application about
 itself: `APP_URL` from the deployment's hostname (the deployment's own, on a
 preview, so its cookies do not target production), `TRUSTED_PROXY=vercel`,

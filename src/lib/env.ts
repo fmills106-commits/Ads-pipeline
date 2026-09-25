@@ -9,8 +9,6 @@ import { z } from 'zod';
  *     not a `undefined` that surfaces three layers deep at 2am.
  */
 
-const nonEmpty = z.string().min(1);
-
 /** A base64-encoded key of exactly `bytes` decoded length. */
 const base64Key = (bytes: number) =>
   z.string().refine(
@@ -23,6 +21,28 @@ const base64Key = (bytes: number) =>
     },
     { message: `must be base64 encoding exactly ${bytes} bytes` },
   );
+
+/**
+ * A PostgreSQL connection string.
+ *
+ * Checked for its scheme rather than accepted as any non-empty string, because
+ * these values are typed into a hosting dashboard by hand and arrive wrapped in
+ * quotes, carrying the `psql ` prefix from a copy button, or still holding the
+ * placeholder out of somebody's setup instructions. Prisma rejects all three,
+ * but it reports them as a *schema* validation failure pointing at the line of
+ * `schema.prisma` that reads `env("DATABASE_URL")` — which sends you reading
+ * the schema, the one file that is not wrong.
+ *
+ * The message names the variable and what is wrong with it instead. It never
+ * quotes the value, which holds a password.
+ */
+const postgresUrl = z
+  .string()
+  .min(1)
+  .refine((value) => value.startsWith('postgresql://') || value.startsWith('postgres://'), {
+    message:
+      'must be a PostgreSQL connection string beginning postgresql:// or postgres:// — check for surrounding quotes, a leading "psql ", or a leftover placeholder',
+  });
 
 /** Accepts "true"/"1"/"yes" (case-insensitive) as true; anything else false. */
 const boolish = (defaultValue: boolean) =>
@@ -49,7 +69,19 @@ const envSchema = z
     // --- Phase 1: core runtime -------------------------------------------
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     APP_URL: z.string().url().default('http://localhost:3000'),
-    DATABASE_URL: nonEmpty,
+    DATABASE_URL: postgresUrl,
+
+    /**
+     * The same database as `DATABASE_URL`, over an unpooled connection.
+     *
+     * The application itself never reads this — `scripts/vercel-build.sh` uses
+     * it to run migrations, because a transaction-mode pooler cannot hold the
+     * session-level advisory lock that stops two deploys migrating at once. It
+     * is declared here anyway so a malformed value is refused at boot with the
+     * same message as the pooled one, rather than surviving until the next
+     * deployment's build.
+     */
+    DIRECT_URL: postgresUrl.optional(),
     AUTH_SECRET: z.string().min(32, 'AUTH_SECRET must be at least 32 characters'),
     ENCRYPTION_KEY: base64Key(32),
     LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
