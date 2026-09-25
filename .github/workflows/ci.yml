@@ -38,7 +38,11 @@ jobs:
       APP_URL: http://localhost:3000
       DATABASE_URL: postgresql://adsdev:adsdev@127.0.0.1:5432/ads_pipeline_test
       AUTH_SECRET: ci-only-auth-secret-not-used-anywhere-real-000000
-      ENCRYPTION_KEY: ZGV2LW9ubHktMzItYnl0ZS1lbmNyeXB0aW9uLWtleS0xMg==
+      # Must decode to EXACTLY 32 bytes — the app refuses to boot otherwise.
+      # An earlier hand-written "readable" placeholder decoded to 34 and took
+      # the whole suite down. Check with:
+      #   node -e "console.log(Buffer.from('<key>','base64').length)"
+      ENCRYPTION_KEY: Y2ktb25seS1ub3QtYS1yZWFsLWtleS0zMmJ5dGVzISE=
       LOG_LEVEL: warn
       LOG_FORMAT: json
       # The whole suite must pass with every paid provider switched off.
@@ -56,14 +60,27 @@ jobs:
 
       - run: npx prisma generate
 
-      - name: Apply migrations
-        run: npx prisma migrate deploy
+      - name: Create a shadow database
+        # `migrate diff --from-migrations` replays every migration into the
+        # shadow database and drops its tables afterwards, so it MUST be a
+        # database of its own. Pointing it at $DATABASE_URL wiped the test
+        # database's migration history mid-run, and every db test then failed
+        # with P3005 "the database schema is not empty".
+        run: PGPASSWORD=adsdev psql -h 127.0.0.1 -U adsdev -d ads_pipeline_test -c 'CREATE DATABASE ads_pipeline_shadow'
 
       - name: Check migrations match the schema
         # Catches a schema.prisma edited without a migration written for it,
-        # which would otherwise only surface on the next deploy.
-        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$DATABASE_URL" --exit-code
-        continue-on-error: false
+        # which would otherwise only surface on the next deploy. Exits 2 when
+        # they differ.
+        run: |
+          npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url "postgresql://adsdev:adsdev@127.0.0.1:5432/ads_pipeline_shadow" \
+            --exit-code
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
 
       - run: npm run format:check
 

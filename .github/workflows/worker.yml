@@ -41,9 +41,17 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Not configured yet is not a failure. This runs every five minutes,
+          # so failing here would send a red run — and an email — twelve times
+          # an hour until someone sets two values, which teaches you to ignore
+          # failing runs. It skips loudly instead, and the reason is one click
+          # away in the Actions tab.
           if [ -z "${APP_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
-            echo "APP_URL variable or CRON_SECRET secret is not set; nothing to call." >&2
-            exit 1
+            echo "::notice::Scheduled worker is not configured yet, so nothing was run."
+            echo "Set the CRON_SECRET secret and the APP_URL variable under"
+            echo "Settings → Secrets and variables → Actions. Until then, queued"
+            echo "website scans will sit unprocessed. See docs/DEPLOY.md step 5."
+            exit 0
           fi
 
           # `--fail-with-body` so an error response is both visible in the log
