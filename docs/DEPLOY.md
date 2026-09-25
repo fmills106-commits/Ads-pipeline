@@ -44,21 +44,27 @@ The last row matters more than it looks — see [The worker](#the-worker).
 1. Create a project at [neon.tech](https://neon.tech). Pick the region nearest
    your users.
 2. From the connection details, copy **both** strings:
-   - the **pooled** one (host contains `-pooler`) → this is `DATABASE_URL`
-   - the **direct** one (no `-pooler`) → used only for migrations
+   - the **pooled** one (host contains `-pooler`) → `DATABASE_URL`
+   - the **direct** one (no `-pooler`) → `DIRECT_URL`
 
-Pooled for the app, because a serverless function opens a connection per
-invocation and would otherwise exhaust the server's limit. Direct for
-migrations, because schema changes do not work through a transaction-mode
-pooler.
+Both are needed, for different jobs. The app uses the pooled connection
+because a serverless function opens one per invocation and would otherwise
+exhaust the server's limit. Migrations use the direct one, because Neon's
+pooler runs in transaction mode and does not support the session-level
+advisory locks `prisma migrate deploy` uses to stop two deploys migrating at
+once — point migrate at the pooled URL and it fails in ways that read like a
+network fault.
 
-Apply the schema from your machine, once:
+**Nothing to run by hand.** `scripts/vercel-build.sh` applies migrations on
+every deploy, before building. That means a deployment cannot go out against a
+database whose schema it does not match, and operating this needs no local
+toolchain: a push is the whole deploy. A bad migration fails the build, which
+is the right way round — a stopped deploy is recoverable, a half-migrated
+production database is not.
 
-```bash
-DATABASE_URL="<the DIRECT string>" npx prisma migrate deploy
-```
-
-Re-run that same command after any future deploy that adds a migration.
+Ignore Neon's "set up with your coding agent" prompt and the "install Neon
+skills" box. They install a CLI, an MCP server and a `neon.ts` config;
+`DATABASE_URL` is the entire interface between this application and Postgres.
 
 ## 2. Secrets
 
