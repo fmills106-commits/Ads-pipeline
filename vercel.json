@@ -4,7 +4,7 @@
   "framework": "nextjs",
   "functions": {
     "src/app/api/cron/worker/route.ts": {
-      "maxDuration": 300
+      "maxDuration": 60
     },
     "src/app/api/businesses/[businessId]/scan/route.ts": {
       "maxDuration": 60
@@ -13,7 +13,7 @@
   "crons": [
     {
       "path": "/api/cron/worker",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 4 * * *"
     }
   ]
 }

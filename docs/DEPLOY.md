@@ -153,12 +153,22 @@ external has to drive the queue. The repository ships a workflow that does it:
 `.github/workflows/worker.yml` then calls `/api/cron/worker` every five
 minutes. It also clears expired sessions and spent rate-limit counters.
 
-`vercel.json` additionally declares a Vercel Cron entry for the same endpoint.
-Whether it fires at the requested frequency depends on your plan — Vercel
-limits cron frequency on Hobby — so the GitHub workflow is the dependable path
-and the Vercel entry is a belt-and-braces extra. Two schedulers calling the
-same endpoint is harmless: jobs are claimed with `FOR UPDATE SKIP LOCKED`, so
-the second caller simply finds nothing to do.
+`vercel.json` additionally declares a Vercel Cron entry for the same endpoint,
+but only once a day (`0 4 * * *`). That is not a preference — Vercel's Hobby
+plan accepts no finer granularity than daily, and a deployment whose
+`vercel.json` asks for more is rejected at build time rather than quietly
+downgraded. So the GitHub workflow is the real scheduler and the Vercel entry
+is a daily safety net for the housekeeping (expired sessions, spent rate-limit
+counters) in case the workflow is never configured.
+
+Two schedulers calling the same endpoint is harmless: jobs are claimed with
+`FOR UPDATE SKIP LOCKED`, so the second caller simply finds nothing to do.
+
+`maxDuration` is 60 seconds for the same reason — that is the Hobby ceiling,
+and asking for more fails the build. `WORKER_MAX_RUN_MS` defaults to 50s on
+Vercel so a drain returns of its own accord before the platform kills it; a
+crawl cut short that way reports PARTIAL with the pages it did read. On a plan
+with longer functions, raise both together or neither.
 
 To confirm it works:
 
