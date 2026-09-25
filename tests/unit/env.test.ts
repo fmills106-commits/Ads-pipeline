@@ -243,3 +243,84 @@ describe('proxy trust', () => {
     expect(() => parseEnv({ ...valid, TRUSTED_PROXY: 'nginx' })).toThrow();
   });
 });
+
+/**
+ * What the hosting platform already knows.
+ *
+ * Four production values are facts about where the code runs rather than
+ * decisions, and every one of them has a bad failure mode when retyped by
+ * hand: `TRUSTED_PROXY=none` on Vercel silently disables per-IP rate
+ * limiting, and an `APP_URL` without `https://` stops the app booting. These
+ * tests pin what is inferred, what is not, and that an explicit value always
+ * wins.
+ */
+describe('platform defaults', () => {
+  const onVercel = {
+    ...valid,
+    NODE_ENV: 'production',
+    VERCEL: '1',
+    VERCEL_ENV: 'production',
+    VERCEL_PROJECT_PRODUCTION_URL: 'ads.example.com',
+    CRON_SECRET: 'c'.repeat(32),
+  } satisfies NodeJS.ProcessEnv;
+
+  it('infers nothing when not on a known platform', () => {
+    // A VPS or a container gets no magic: it configures itself.
+    const env = parseEnv(valid);
+    expect(env.TRUSTED_PROXY).toBe('none');
+    expect(env.APP_URL).toBe('http://localhost:3000');
+  });
+
+  it('derives the URL, proxy, log format and worker budget on Vercel', () => {
+    const { APP_URL: _url, ...withoutUrl } = onVercel;
+    const env = parseEnv(withoutUrl);
+
+    expect(env.APP_URL).toBe('https://ads.example.com');
+    expect(env.TRUSTED_PROXY).toBe('vercel');
+    expect(env.LOG_FORMAT).toBe('json');
+    // Below Hobby's function timeout, so a crawl stops itself rather than
+    // being killed mid-page and repeating the whole attempt.
+    expect(env.WORKER_MAX_RUN_MS).toBeLessThan(60_000);
+  });
+
+  it('uses the deployment’s own hostname for a preview', () => {
+    // Pointing a preview at the production URL would send its session
+    // cookies and OAuth redirects to the wrong site.
+    const { APP_URL: _url, ...rest } = onVercel;
+    const env = parseEnv({
+      ...rest,
+      VERCEL_ENV: 'preview',
+      VERCEL_URL: 'ads-pipeline-git-branch.vercel.app',
+    });
+
+    expect(env.APP_URL).toBe('https://ads-pipeline-git-branch.vercel.app');
+  });
+
+  it('never overrides a value that was set explicitly', () => {
+    const env = parseEnv({
+      ...onVercel,
+      APP_URL: 'https://custom.example.com',
+      TRUSTED_PROXY: 'cloudflare',
+      WORKER_MAX_RUN_MS: '120000',
+    });
+
+    // Cloudflare in front of Vercel is a real setup, and inference must not
+    // fight a deliberate choice.
+    expect(env.APP_URL).toBe('https://custom.example.com');
+    expect(env.TRUSTED_PROXY).toBe('cloudflare');
+    expect(env.WORKER_MAX_RUN_MS).toBe(120_000);
+  });
+
+  it('refuses a production deployment running in development mode', () => {
+    // The one misconfiguration with no symptom: safety checks skipped and
+    // session cookies no longer marked secure. Reachable by importing
+    // .env.example into a host, which carries NODE_ENV=development.
+    expect(() => parseEnv({ ...onVercel, NODE_ENV: 'development' })).toThrow(/NODE_ENV/);
+  });
+
+  it('still allows a preview deployment to run in development mode', () => {
+    expect(() =>
+      parseEnv({ ...onVercel, VERCEL_ENV: 'preview', NODE_ENV: 'development' }),
+    ).not.toThrow();
+  });
+});

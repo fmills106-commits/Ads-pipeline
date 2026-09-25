@@ -83,35 +83,37 @@ Import the GitHub repository at [vercel.com/new](https://vercel.com/new). It
 detects Next.js; `vercel.json` in the repository supplies the build command and
 the function limits.
 
-Set these environment variables for **Production**:
+Set these environment variables for **Production**. There are five, and all
+five are secrets — nothing else needs setting:
 
-| Variable            | Value                      |
-| ------------------- | -------------------------- |
-| `DATABASE_URL`      | the **pooled** Neon string |
-| `AUTH_SECRET`       | generated above            |
-| `ENCRYPTION_KEY`    | generated above            |
-| `CRON_SECRET`       | generated above            |
-| `APP_URL`           | `https://your-domain.com`  |
-| `NODE_ENV`          | `production`               |
-| `LOG_FORMAT`        | `json`                     |
-| `TRUSTED_PROXY`     | `vercel`                   |
-| `ZERO_COST_MODE`    | `true`                     |
-| `WORKER_MAX_RUN_MS` | `50000`                    |
+| Variable         | Value                                 |
+| ---------------- | ------------------------------------- |
+| `DATABASE_URL`   | the **pooled** Neon string            |
+| `DIRECT_URL`     | the **direct** (unpooled) Neon string |
+| `AUTH_SECRET`    | generated above                       |
+| `ENCRYPTION_KEY` | generated above                       |
+| `CRON_SECRET`    | generated above                       |
 
-Notes on the two that are easy to get wrong:
+Everything else is derived from what Vercel tells the application about
+itself: `APP_URL` from the deployment's hostname (the deployment's own, on a
+preview, so its cookies do not target production), `TRUSTED_PROXY=vercel`,
+`LOG_FORMAT=json`, and a `WORKER_MAX_RUN_MS` that fits inside the function
+timeout. Set any of them explicitly and the explicit value wins — which is
+what you want if you later put Cloudflare's proxy in front, since the header
+carrying the client's address changes with it.
 
-- **`TRUSTED_PROXY=vercel`** is what makes per-IP rate limiting work. Left at
-  `none`, every anonymous request shares one bucket — safe, but it means one
-  visitor's failed logins count against everybody's.
-- **`WORKER_MAX_RUN_MS`** must sit _below_ your plan's function timeout. Set it
-  too high and an invocation is killed mid-crawl and the whole attempt is
-  repeated; set correctly, a long crawl stops itself and reports what it did
-  read. 50000 (50s) is a safe starting point on Hobby. Check your plan's actual
-  limit in Vercel's docs and leave a margin.
+**When Vercel offers to import environment variables from the repository,
+decline, or check what it filled in.** It reads `.env.example`, whose values
+are local-development defaults. The secrets there are commented out for this
+reason, but `DATABASE_URL` still points at a local Postgres and `APP_URL` at
+`http://localhost:3000` — neither of which you want in production. The app
+refuses to boot on an `http://` `APP_URL` rather than running insecurely, and
+refuses outright if a production deployment ends up with
+`NODE_ENV=development`, which would otherwise silently skip every safety
+check and stop marking session cookies secure.
 
-The app refuses to start if `APP_URL` is not `https://`, if `CRON_SECRET` is
-missing, or if `LOG_FORMAT` is `pretty` — deliberately, because each of those
-fails silently and expensively otherwise.
+**Do not add Vercel's "Prisma Postgres" integration.** You already have Neon;
+that would create a second database and set a conflicting `DATABASE_URL`.
 
 ## 4. Domain (Cloudflare)
 

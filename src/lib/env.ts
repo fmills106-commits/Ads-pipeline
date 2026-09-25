@@ -139,6 +139,15 @@ const envSchema = z
 
     /// Set by Next.js itself. Read, never configured by us — see below.
     NEXT_PHASE: z.string().optional(),
+
+    // --- Set by the hosting platform -------------------------------------
+    // Read, never configured by us. `applyPlatformDefaults` uses them to fill
+    // in what the platform already knows, and the refinement below uses
+    // VERCEL_ENV to catch a deployment running in the wrong mode.
+    VERCEL: z.string().optional(),
+    VERCEL_ENV: z.string().optional(),
+    VERCEL_URL: z.string().optional(),
+    VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
   })
   .superRefine((value, ctx) => {
     // Partial S3 configuration is worse than none: it looks configured and
@@ -197,6 +206,29 @@ const envSchema = z
      */
     const isBuild = value.NEXT_PHASE === 'phase-production-build';
 
+    /*
+     * A production deployment running with NODE_ENV=development is refused
+     * rather than corrected.
+     *
+     * This is the one misconfiguration here with no symptom: every
+     * production-only check below is skipped, and session cookies lose their
+     * `secure` flag, so they travel over plain HTTP if anything ever
+     * downgrades the connection. It is easy to arrive at by accident —
+     * importing `.env.example` into a host picks up `NODE_ENV=development`
+     * along with everything else.
+     *
+     * Silently forcing it to production would hide a real mistake in
+     * somebody's project settings. Refusing says what is wrong, once.
+     */
+    if (value.VERCEL_ENV === 'production' && value.NODE_ENV !== 'production' && !isBuild) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['NODE_ENV'],
+        message:
+          'must be "production" on a production deployment. Every safety check below is skipped otherwise, and session cookies are not marked secure. Remove NODE_ENV from your project settings, or set it to production.',
+      });
+    }
+
     if (value.NODE_ENV === 'production' && !isBuild) {
       if (value.APP_URL.startsWith('http://')) {
         ctx.addIssue({
@@ -233,13 +265,72 @@ export type Env = z.infer<typeof envSchema>;
  * @throws {Error} with every validation failure listed, when parsing fails.
  */
 export function parseEnv(source: NodeJS.ProcessEnv): Env {
-  const result = envSchema.safeParse(source);
+  const result = envSchema.safeParse(applyPlatformDefaults(source));
   if (result.success) return result.data;
 
   const details = result.error.issues
     .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
     .join('\n');
   throw new Error(`Invalid environment configuration:\n${details}`);
+}
+
+/**
+ * Fills in what the hosting platform already knows.
+ *
+ * Four of the values a deployment needs are not really decisions — they are
+ * facts about where the code is running, which the platform states in its own
+ * build environment. Asking an operator to retype them is asking them to get
+ * them wrong: setting `TRUSTED_PROXY=none` on Vercel silently disables per-IP
+ * rate limiting, and an `APP_URL` typo without `https://` stops the app
+ * booting.
+ *
+ * Note what is and is not inferred. The *platform* is inferred, from variables
+ * the platform sets at build time and a request cannot influence. Which header
+ * to believe for a client's address is still a configured decision — it just
+ * gets a correct default once the platform is known. That is a different thing
+ * from reading `X-Forwarded-For` and hoping, which is what this exists to
+ * avoid.
+ *
+ * Anything explicitly set always wins, so this can never override a
+ * deliberate choice.
+ */
+function applyPlatformDefaults(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // Set by Vercel in every build and runtime; absent everywhere else.
+  if (source['VERCEL'] !== '1') return source;
+
+  const filled: NodeJS.ProcessEnv = { ...source };
+  const setIfAbsent = (key: string, value: string | undefined): void => {
+    if (value && !filled[key]) filled[key] = value;
+  };
+
+  /*
+   * A preview deployment has its own hostname, so pointing it at the
+   * production URL would make session cookies and OAuth redirects target the
+   * wrong site. `VERCEL_URL` is this deployment; the other is the stable one.
+   */
+  const host =
+    source['VERCEL_ENV'] === 'production'
+      ? source['VERCEL_PROJECT_PRODUCTION_URL']
+      : source['VERCEL_URL'];
+  setIfAbsent('APP_URL', host ? `https://${host}` : undefined);
+
+  // Vercel terminates TLS and sets X-Real-IP itself, overwriting any the
+  // caller supplied.
+  setIfAbsent('TRUSTED_PROXY', 'vercel');
+
+  // Serverless logs are collected and indexed; pretty-printing only makes
+  // them harder to search.
+  setIfAbsent('LOG_FORMAT', 'json');
+
+  /*
+   * Below the platform's function timeout, so a crawl stops itself and
+   * reports what it read rather than being killed mid-page and repeating the
+   * whole attempt. 50s fits inside Hobby's ceiling; a project on a plan with
+   * longer functions can raise it explicitly.
+   */
+  setIfAbsent('WORKER_MAX_RUN_MS', '50000');
+
+  return filled;
 }
 
 let cached: Env | undefined;
