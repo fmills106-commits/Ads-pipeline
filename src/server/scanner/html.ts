@@ -110,6 +110,22 @@ export interface PageExtraction {
   links: string[];
   business: ExtractedBusiness;
   /**
+   * What the page says its own images show, from their alt text.
+   *
+   * The cheapest product information on the web, and it was being discarded
+   * entirely: `extractVisibleText` reads text nodes, and alt lives in an
+   * attribute. A real storefront named its twelve Halloween designs only here
+   * — "Sunset Bats squishy, sealed in its wrapper", and eleven more — while
+   * the advertisement written from that page said "See the details and decide
+   * for yourself."
+   *
+   * This is not image recognition. It is reading what the merchant already
+   * wrote about their own pictures, which costs nothing and which no model can
+   * improve on for the images that have it.
+   */
+  imageAlts: string[];
+
+  /**
    * Every product this page offers, in the order they appear.
    *
    * Usually empty or one. A one-page shop and a pricing grid put several on a
@@ -171,6 +187,7 @@ export function extractFromHtml(html: string, pageUrl: string): PageExtraction {
     structuredData: { jsonLd, openGraph, microdata },
     links,
     business,
+    imageAlts: extractImageAlts(root),
     products,
     injectionSignals: scanForInjectionSignals(`${title ?? ''}\n${text}`).signals,
   };
@@ -402,6 +419,35 @@ export function extractLinks(root: HTMLElement, pageUrl: string): string[] {
     } catch {
       continue;
     }
+  }
+
+  return [...seen];
+}
+
+/** How many image descriptions one page may contribute. */
+const MAX_IMAGE_ALTS = 60;
+
+/**
+ * The alt text of a page's images, deduplicated and cleaned.
+ *
+ * Decorative images carry `alt=""` by design — that is the accessible way to
+ * say "this picture means nothing" — so an empty one is skipped rather than
+ * recorded as an unknown. A one-word alt is skipped too: "photo", "image" and
+ * a filename tell a writer nothing and would dilute the ones that do.
+ */
+export function extractImageAlts(root: HTMLElement): string[] {
+  const seen = new Set<string>();
+
+  for (const image of root.querySelectorAll('img')) {
+    if (seen.size >= MAX_IMAGE_ALTS) break;
+
+    const alt = image.getAttribute('alt')?.replace(/\s+/g, ' ').trim();
+    if (!alt) continue;
+    // Two words at minimum, and not just a file name.
+    if (alt.split(' ').length < 2) continue;
+    if (/\.(?:jpe?g|png|webp|gif|svg|avif)$/i.test(alt)) continue;
+
+    seen.add(alt.slice(0, 300));
   }
 
   return [...seen];
@@ -1078,7 +1124,7 @@ function extractOfferGroup(input: ProductExtractionInput): ExtractedProduct[] {
 
       const products: ExtractedProduct[] = [];
       for (const card of siblings) {
-        const product = productFromCard(card);
+        const product = productFromCard(card, input.pageUrl);
         if (product) products.push(product);
       }
 
@@ -1129,7 +1175,57 @@ function sellsInPlace(card: HTMLElement): boolean {
   return false;
 }
 
-function productFromCard(card: HTMLElement): ExtractedProduct | null {
+/**
+ * A card's images, resolved to absolute URLs, with their alt text.
+ *
+ * `srcset` and `data-src` are read as well as `src`, because a lazy-loading
+ * storefront leaves `src` as a placeholder pixel and puts the real picture in
+ * one of the others — taking `src` alone would store a 1x1 transparent GIF as
+ * the product photograph.
+ */
+function imagesWithin(
+  card: HTMLElement,
+  pageUrl: string,
+): Array<{ url: string; altText?: string; isPrimary: boolean }> {
+  const images: Array<{ url: string; altText?: string; isPrimary: boolean }> = [];
+  const seen = new Set<string>();
+
+  for (const image of card.querySelectorAll('img')) {
+    /*
+     * First candidate that is not a placeholder, rather than the first that
+     * exists. `src ?? data-src` reads the data URI — it is present — and then
+     * skipping it loses the image altogether, which is how a lazy-loading
+     * storefront ends up with no product photographs at all.
+     */
+    const raw = [
+      image.getAttribute('src'),
+      image.getAttribute('data-src'),
+      image.getAttribute('data-lazy-src'),
+      image.getAttribute('srcset')?.split(',')[0]?.trim().split(/\s+/)[0],
+    ]
+      .map((candidate) => candidate?.trim())
+      .find((candidate) => Boolean(candidate) && !candidate!.startsWith('data:'));
+
+    if (!raw) continue;
+
+    const resolved = resolveMaybe(raw, pageUrl);
+    if (!resolved || seen.has(resolved)) continue;
+    seen.add(resolved);
+
+    const alt = image.getAttribute('alt')?.replace(/\s+/g, ' ').trim();
+    images.push({
+      url: resolved,
+      ...(alt ? { altText: alt.slice(0, 300) } : {}),
+      isPrimary: images.length === 0,
+    });
+
+    if (images.length >= 6) break;
+  }
+
+  return images;
+}
+
+function productFromCard(card: HTMLElement, pageUrl: string): ExtractedProduct | null {
   if (!sellsInPlace(card)) return null;
 
   let price: { cents: number; currency: string | null; excerpt: string } | null = null;
@@ -1168,7 +1264,11 @@ function productFromCard(card: HTMLElement): ExtractedProduct | null {
   const product: ExtractedProduct = {
     name: value(name, 'HTML', name),
     priceCents: value(price.cents, 'HTML', price.excerpt),
-    images: [],
+    // A card's own pictures, with whatever the merchant said they show. This
+    // path returned an empty array at first, so a one-page shop's products had
+    // no images and no alt text — the two things most worth having about a
+    // physical product.
+    images: imagesWithin(card, pageUrl),
     statedOffers: [],
     callsToAction: [],
   };

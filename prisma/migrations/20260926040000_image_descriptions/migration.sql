@@ -1,0 +1,23 @@
+-- What a page says its own images show.
+--
+-- Additive and nullable-by-default (an empty array), so this applies to a
+-- populated database without touching a row.
+--
+-- Alt text is the cheapest product information on the web and the engine was
+-- ignoring all of it. A real storefront's twelve Halloween designs were named
+-- only there — "Sunset Bats squishy, sealed in its wrapper", eleven more like
+-- it — and the advertisement written from that page said "See the details and
+-- decide for yourself."
+--
+-- Stored separately from `extractedText` rather than appended to it. That
+-- column is what a visitor would read, and the listing and call-to-action
+-- heuristics count prices and phrases in it; folding attribute text in would
+-- quietly change what those heuristics see. It is also a different kind of
+-- statement: a description the merchant wrote *about an image*, which is worth
+-- labelling as such when it reaches a writer.
+--
+-- This is not image recognition. It is reading what the merchant already
+-- wrote, which costs nothing and no model can improve on for the images that
+-- have it.
+
+ALTER TABLE "website_pages" ADD COLUMN "imageAlts" TEXT[] DEFAULT ARRAY[]::TEXT[];

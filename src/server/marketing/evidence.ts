@@ -76,6 +76,15 @@ export interface Evidence {
   productsText: string;
   pageText: string;
   ownerNotesText: string;
+  /**
+   * What the merchant said their own pictures show.
+   *
+   * Often the most specific thing on a page, and the engine ignored all of it
+   * until an owner pointed out that words alone were not enough. Their twelve
+   * Halloween designs were named nowhere else — "Sunset Bats squishy, sealed
+   * in its wrapper", and eleven more like it.
+   */
+  imageText: string;
 }
 
 /**
@@ -106,12 +115,21 @@ export async function gatherEvidence(
       },
       orderBy: { lastSeenAt: 'desc' },
       take: options.productId ? 1 : MAX_PRODUCTS,
+      // The alt text is the point of including these: a physical product's
+      // pictures are often described better than the product is.
+      include: { images: { orderBy: { position: 'asc' }, take: 4 } },
     }),
     db.websitePage.findMany({
       where: { businessId: context.businessId, pageType: { in: INFORMATIVE_PAGES } },
       orderBy: { fetchedAt: 'desc' },
       take: MAX_PAGES,
-      select: { url: true, title: true, pageType: true, extractedText: true },
+      select: {
+        url: true,
+        title: true,
+        pageType: true,
+        extractedText: true,
+        imageAlts: true,
+      },
     }),
   ]);
 
@@ -127,6 +145,7 @@ export async function gatherEvidence(
     factsText: facts.map((fact) => `${fact.key}: ${fact.value}`).join('\n'),
     productsText: evidenceProducts.map(renderProduct).join('\n\n'),
     pageText: renderPages(pages),
+    imageText: renderImages(pages, products),
     ownerNotesText: context.business.description
       ? `The owner says, in their own words:\n${context.business.description}`
       : '',
@@ -180,6 +199,68 @@ function renderProduct(product: EvidenceProduct): string {
   lines.push(`Availability: ${product.availability}`);
 
   return lines.join('\n');
+}
+
+/** How many image descriptions reach a writer. Enough for a full catalogue. */
+const MAX_IMAGE_LINES = 40;
+
+/**
+ * What the pictures show, according to the merchant.
+ *
+ * Product images first, because an image attached to a product is evidence
+ * about *that* product; page-level ones after, as context. Both are labelled
+ * as descriptions of images rather than claims about the product, because that
+ * is what they are: a writer may say a design is called "Sunset Bats" on the
+ * strength of it, and should not say the squishy is "sealed for freshness" on
+ * the strength of the word "sealed".
+ *
+ * Nothing here is generated. It is the merchant's own alt text, which is free
+ * to read and which no vision model can improve on where it exists.
+ */
+function renderImages(
+  pages: Array<{ url: string; imageAlts: string[] }>,
+  products: Array<Product & { images?: Array<{ altText: string | null }> }>,
+): string {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+
+  const add = (line: string): void => {
+    const key = line.toLowerCase();
+    if (seen.has(key) || lines.length >= MAX_IMAGE_LINES) return;
+    seen.add(key);
+    lines.push(line);
+  };
+
+  for (const product of products) {
+    for (const alt of productImageAlts(product)) add(`${product.name}: ${alt}`);
+  }
+  for (const page of pages) {
+    for (const alt of page.imageAlts) add(alt);
+  }
+
+  if (lines.length === 0) return '';
+
+  return [
+    'How the merchant describes the pictures on their own site.',
+    'These describe images, not guarantees — use them for what the thing looks',
+    'like and what it is called, not for claims about how it performs.',
+    '',
+    ...lines.map((line) => `- ${line}`),
+  ].join('\n');
+}
+
+/**
+ * Alt text stored against a product's images.
+ *
+ * `images` is a relation, so it is absent unless the caller included it. The
+ * dossier does not, to keep the query cheap — this reads whatever is there and
+ * returns nothing when it is not, rather than making every writer pay for a
+ * join most of them do not use.
+ */
+function productImageAlts(product: { images?: Array<{ altText: string | null }> }): string[] {
+  return (product.images ?? [])
+    .map((image) => image.altText?.trim())
+    .filter((alt): alt is string => Boolean(alt));
 }
 
 function renderPages(

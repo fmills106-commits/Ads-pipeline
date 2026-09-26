@@ -641,6 +641,14 @@ model WebsitePage {
   /// Visible text, stripped of markup and capped. UNTRUSTED: this is arbitrary
   /// third-party content and is never treated as instruction.
   extractedText  String?
+
+  /// What the page says its own images show, from their alt text.
+  ///
+  /// Kept out of `extractedText` deliberately: that column is what a visitor
+  /// would read, and the listing heuristics count prices and phrases in it.
+  /// This is also a different kind of statement — the merchant describing an
+  /// image — which is worth labelling when it reaches a writer.
+  imageAlts      String[] @default([])
   /// JSON-LD, OpenGraph and microdata found on the page, as extracted.
   structuredData Json?
 

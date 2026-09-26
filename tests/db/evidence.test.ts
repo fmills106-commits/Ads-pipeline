@@ -189,6 +189,83 @@ describe('the dossier handed to a writer', () => {
   });
 });
 
+describe('what the pictures show', () => {
+  /*
+   * The owner's point: words alone are not enough for a physical product. The
+   * cheapest version of seeing is reading what the merchant already wrote
+   * about their own pictures — and the engine was discarding all of it. Twelve
+   * Halloween designs were named in alt text and nowhere else.
+   */
+  it('carries the merchant’s own image descriptions', async () => {
+    const { context } = await businessWithProduct();
+    const website = await prisma.website.findFirstOrThrow({
+      where: { businessId: context.businessId },
+    });
+    await prisma.websitePage.create({
+      data: {
+        businessId: context.businessId,
+        websiteId: website.id,
+        url: 'https://example.com/',
+        finalUrl: 'https://example.com/',
+        pageType: 'HOME',
+        title: 'Smooshery',
+        extractedText: 'Pick your pack.',
+        imageAlts: [
+          'Sunset Bats squishy, sealed in its wrapper',
+          'Cotton Ghost squishy, sealed in its wrapper',
+        ],
+        contentHash: 'h',
+        httpStatus: 200,
+      },
+    });
+
+    const evidence = await gatherEvidence(context);
+
+    expect(evidence.imageText).toContain('Sunset Bats');
+    expect(evidence.imageText).toContain('Cotton Ghost');
+  });
+
+  it('attributes a product’s own picture to that product', async () => {
+    const { context, productId } = await businessWithProduct();
+    await prisma.productImage.create({
+      data: {
+        productId,
+        sourceUrl: 'https://example.com/img/case.webp',
+        altText: 'A retail display box, six wrapped designs visible',
+        position: 0,
+      },
+    });
+
+    const evidence = await gatherEvidence(context, { productId });
+
+    // Named, so a writer knows which product it is evidence about.
+    expect(evidence.imageText).toContain('Full Case: A retail display box');
+  });
+
+  it('says these describe pictures, not guarantees', async () => {
+    const { context, productId } = await businessWithProduct();
+    await prisma.productImage.create({
+      data: {
+        productId,
+        sourceUrl: 'https://example.com/img/a.webp',
+        altText: 'Sealed in its wrapper',
+        position: 0,
+      },
+    });
+
+    const evidence = await gatherEvidence(context, { productId });
+
+    // A writer may say a design is called "Sunset Bats" on this evidence, and
+    // must not say the product is "sealed for freshness" on it.
+    expect(evidence.imageText).toMatch(/describe images, not guarantees/);
+  });
+
+  it('is empty when the site describes none of its pictures', async () => {
+    const { context } = await businessWithProduct();
+    expect((await gatherEvidence(context)).imageText).toBe('');
+  });
+});
+
 describe('setProductDetails', () => {
   it('records the cost, which makes margin knowable', async () => {
     const { context, productId } = await businessWithProduct();

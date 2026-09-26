@@ -772,3 +772,106 @@ describe('a page that offers several products', () => {
     });
   });
 });
+
+/**
+ * What a page says its own pictures show.
+ *
+ * The owner's observation, and they were right: words alone were not enough,
+ * and the engine was throwing away the words it already had. A real
+ * storefront's twelve Halloween designs were named nowhere on the page except
+ * in alt text — "Sunset Bats squishy, sealed in its wrapper", and eleven more
+ * — while the advertisement written from that page said "See the details and
+ * decide for yourself."
+ *
+ * Alt text lives in an attribute, and `extractVisibleText` reads text nodes,
+ * so all of it was invisible.
+ */
+describe('image descriptions', () => {
+  const extract = (body: string, url = 'https://shop.example.com/') =>
+    extractFromHtml(
+      `<!DOCTYPE html><html><head><title>t</title></head><body>${body}</body></html>`,
+      url,
+    );
+
+  it('reads what the merchant said their pictures show', () => {
+    const result = extract(
+      `<img src="/a.webp" alt="Sunset Bats squishy, sealed in its wrapper">
+       <img src="/b.webp" alt="Cotton Ghost squishy, sealed in its wrapper">`,
+    );
+
+    expect(result.imageAlts).toEqual([
+      'Sunset Bats squishy, sealed in its wrapper',
+      'Cotton Ghost squishy, sealed in its wrapper',
+    ]);
+  });
+
+  it('skips decorative images, which say alt="" on purpose', () => {
+    // An empty alt is the accessible way to say "this picture means nothing".
+    // Recording it as unknown would be reading it backwards.
+    const result = extract('<img src="/lantern.webp" alt=""><img src="/ghost.webp">');
+    expect(result.imageAlts).toEqual([]);
+  });
+
+  it('skips a filename or a single word', () => {
+    // "photo", "image", "IMG_4312.jpg" tell a writer nothing and would dilute
+    // the descriptions that do.
+    const result = extract(
+      `<img src="/a.webp" alt="photo">
+       <img src="/b.webp" alt="squishy-01.webp">
+       <img src="/c.webp" alt="Haunted House squishy">`,
+    );
+    expect(result.imageAlts).toEqual(['Haunted House squishy']);
+  });
+
+  it('does not repeat the same description', () => {
+    const result = extract(
+      `<img src="/a.webp" alt="Same thing"><img src="/b.webp" alt="Same thing">`,
+    );
+    expect(result.imageAlts).toHaveLength(1);
+  });
+
+  it('keeps them out of the page text, where heuristics count things', () => {
+    // Folding attribute text into the visible text would quietly change what
+    // the listing and call-to-action rules see.
+    const result = extract('<p>Only this is visible.</p><img src="/a.webp" alt="Hidden words">');
+    expect(result.text).not.toContain('Hidden words');
+    expect(result.imageAlts).toContain('Hidden words');
+  });
+
+  describe('on a product card', () => {
+    const shop = (cardImages: string) => `<h1>Packs</h1><div class="packs">
+      <div class="pack"><span class="pack__name">Single</span><span>$15</span>
+        ${cardImages}<button data-sku="single">Add to cart</button></div>
+      <div class="pack"><span class="pack__name">3-Pack</span><span>$39</span>
+        ${cardImages}<button data-sku="three">Add to cart</button></div>
+    </div>`;
+
+    it('attaches the card’s own picture to that product', () => {
+      const result = extract(shop('<img src="/img/single.webp" alt="One wrapped squishy">'));
+      const [single] = result.products;
+
+      expect(single?.images[0]?.url).toBe('https://shop.example.com/img/single.webp');
+      expect(single?.images[0]?.altText).toBe('One wrapped squishy');
+      expect(single?.images[0]?.isPrimary).toBe(true);
+    });
+
+    it('does not store a placeholder pixel as the photograph', () => {
+      // A lazy-loading storefront leaves a transparent GIF in `src` and puts
+      // the real picture in `data-src`.
+      const result = extract(
+        shop(
+          '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-src="/img/real.webp" alt="The real one">',
+        ),
+      );
+      expect(result.products[0]?.images[0]?.url).toBe('https://shop.example.com/img/real.webp');
+    });
+
+    it('leaves a card with no picture with no picture', () => {
+      // The four packs on the real site have none; guessing which of the
+      // page's twelve squishy photographs belongs to which pack size is
+      // exactly the invention this extractor refuses to make.
+      const result = extract(shop(''));
+      expect(result.products[0]?.images).toEqual([]);
+    });
+  });
+});
