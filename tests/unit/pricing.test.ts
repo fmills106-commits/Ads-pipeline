@@ -93,6 +93,18 @@ describe('what a call might cost', () => {
     expect(unknown).toBe(dearest);
   });
 
+  it('counts the photographs, which bill as input', () => {
+    const base = { model: 'claude-sonnet-5', promptChars: 30_000, maxOutputTokens: 2_048 };
+
+    const seeing = estimateCallCostCents({ ...base, imageCount: 3 });
+    const blind = estimateCallCostCents(base);
+
+    // 3 × 1,600 tokens at $2 per million is just under a penny. Small, and it
+    // has to be counted: a ceiling checked against an estimate that ignores the
+    // pictures is checking a different call from the one about to be made.
+    expect(seeing - blind).toBe(1);
+  });
+
   it('never estimates a paid call at nothing', () => {
     /*
      * `checkBudget` reads an estimate of zero as "free" and skips every ceiling,

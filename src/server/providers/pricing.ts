@@ -125,12 +125,28 @@ export function toWholeCents(cents: number): number {
   return Math.max(1, Math.round(cents));
 }
 
+/**
+ * What one photograph costs to look at, in input tokens.
+ *
+ * An image bills as roughly its pixels divided by 750, so this stands for an
+ * image about 1100 pixels square — a large product photograph. Smaller ones cost
+ * less and this over-states them, which is the right direction for a number a
+ * spending limit is checked against.
+ *
+ * Worth knowing in cents: at the default model, about a third of a penny each.
+ * Three of them add roughly a penny to a call — real, and small against what
+ * they add, which is a writer that has seen the product.
+ */
+export const TOKENS_PER_IMAGE = 1_600;
+
 export interface EstimateInput {
   model: string;
   /** Everything that will be sent: instruction, data blocks, system prompt. */
   promptChars: number;
   /** The output ceiling for the call. Assumed spent in full. */
   maxOutputTokens: number;
+  /** Photographs sent with it, which bill as input tokens. */
+  imageCount?: number;
 }
 
 /**
@@ -145,7 +161,8 @@ export interface EstimateInput {
 export function estimateCallCostCents(input: EstimateInput): number {
   const price = priceFor(input.model) ?? DEAREST_KNOWN_PRICE;
   const cents = costOf(price, {
-    inputTokens: Math.ceil(input.promptChars / CHARS_PER_TOKEN),
+    inputTokens:
+      Math.ceil(input.promptChars / CHARS_PER_TOKEN) + (input.imageCount ?? 0) * TOKENS_PER_IMAGE,
     outputTokens: input.maxOutputTokens,
   });
 

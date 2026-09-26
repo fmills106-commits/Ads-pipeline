@@ -72,7 +72,10 @@ export async function generateStrategies(
       'draw the specifics from it rather than writing around the product name.',
       'The image descriptions say what the pictures show \u2014 often the names,',
       'colours and variants of the thing, which exist nowhere else.',
+      'Where photographs are attached, look at them: they show what the product',
+      'actually is in a way no description of it does.',
     ].join(' '),
+    images: evidence.imageUrls.map((url) => ({ url })),
     data: {
       productName: product.name,
       productDetails: describeProduct(product),
@@ -202,6 +205,8 @@ export async function generateAdCopy(
       'The image descriptions say what the pictures show. Use them for what the',
       'product looks like and what its variants are called; do not turn a word',
       'in one into a claim about how the product performs.',
+      'Where photographs are attached, write from what they plainly show \u2014 the',
+      'shape, the colour, the material, what comes in the box.',
       'Do not state a price unless it is supplied, do not mention a discount',
       'unless an approved offer is supplied, and make no claim about awards,',
       'ratings, stock levels, deadlines, health or income.',
@@ -230,6 +235,9 @@ export async function generateAdCopy(
       websiteText: dossier.pageText,
       imageDescriptions: dossier.imageText,
     },
+    // The pictures themselves, for a writer that can see them. Ignored by the
+    // free one, which has the merchant's alt text above and nothing else.
+    images: dossier.imageUrls.map((url) => ({ url })),
     schema: adCopySetSchema,
     inputSummary: `Copy for "${product.name}" using the ${strategy.angle} angle`,
     factIds: facts.map((fact) => fact.id),

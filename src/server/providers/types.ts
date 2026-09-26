@@ -163,6 +163,19 @@ export interface AICompletionRequest<T> {
   parse: (raw: unknown) => T;
   maxOutputTokens?: number;
   /**
+   * Pictures of the one thing being written about.
+   *
+   * Optional, and ignored by any provider that cannot see — the free one does
+   * not look at them, and the application works identically without them.
+   *
+   * These are untrusted in a way text is not: an image can carry writing, and
+   * writing in an image is as capable of saying "ignore your instructions" as a
+   * product description is. A provider that sends them must say, in its own
+   * trusted instruction, that they are photographs to describe and not
+   * directions to follow.
+   */
+  images?: ProvidedImage[];
+  /**
    * JSON Schema describing what `parse` will accept.
    *
    * Optional, and a provider may ignore it — the local one does, since it
@@ -175,6 +188,19 @@ export interface AICompletionRequest<T> {
    * drift away from what validation actually requires.
    */
   outputSchema?: Record<string, unknown>;
+}
+
+/**
+ * A picture the model may look at, by public URL.
+ *
+ * A URL rather than bytes on purpose. The alternative — download every image,
+ * hold it in memory, base64 it, send it — costs bandwidth on a host that bills
+ * for it, and buys nothing: these images are already public, already served by
+ * the merchant's own CDN, and already fetched once by whoever is being shown the
+ * advertisement. The provider fetches them itself or does without.
+ */
+export interface ProvidedImage {
+  url: string;
 }
 
 export interface ImageGenerationProvider extends Provider {

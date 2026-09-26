@@ -85,6 +85,19 @@ export interface Evidence {
    * in its wrapper", and eleven more like it.
    */
   imageText: string;
+  /**
+   * Public URLs of this product's own photographs, for a writer that can see.
+   *
+   * Only populated when the dossier is about one product, because a picture is
+   * evidence about the thing in it: handed a mixed set from forty products, a
+   * writer has no way to know which is which, and would describe the wrong one
+   * with total confidence.
+   *
+   * Empty on the free path in effect, since nothing free looks at them. The
+   * merchant's alt text above remains the free equivalent and stays populated
+   * either way.
+   */
+  imageUrls: string[];
 }
 
 /**
@@ -146,6 +159,7 @@ export async function gatherEvidence(
     productsText: evidenceProducts.map(renderProduct).join('\n\n'),
     pageText: renderPages(pages),
     imageText: renderImages(pages, products),
+    imageUrls: options.productId ? worthLookingAt(products) : [],
     ownerNotesText: context.business.description
       ? `The owner says, in their own words:\n${context.business.description}`
       : '',
@@ -205,6 +219,55 @@ function renderProduct(product: EvidenceProduct): string {
 const MAX_IMAGE_LINES = 40;
 
 /**
+ * How many photographs a writer that can see is shown.
+ *
+ * Three, and the number is a cost decision as much as a quality one: each image
+ * is somewhere between one and two thousand tokens, so a fourth costs about as
+ * much as another page of text and says less. Three covers the usual shape of a
+ * product gallery — the thing, the thing in use, the thing's packaging.
+ */
+const MAX_IMAGES_SHOWN = 3;
+
+/**
+ * Below this, on the short side, a declared image is furniture.
+ *
+ * A 48×48 file attached to a product is a badge, a payment icon or a flag, and
+ * showing one to a writer buys a confident description of a padlock.
+ */
+const TOO_SMALL_TO_SHOW = 200;
+
+/**
+ * The product photographs worth paying to look at.
+ *
+ * Ordered by declared size, largest first, because the biggest image on a
+ * product page is almost always the product and the small ones are almost always
+ * thumbnails, swatches and badges. Images whose size the page never declared
+ * sort after the ones it did, keeping their gallery order among themselves —
+ * unknown is not the same as small, and the first image in a gallery is usually
+ * the main one.
+ */
+function worthLookingAt(products: Array<Product & { images?: EvidenceImage[] }>): string[] {
+  const images = products[0]?.images ?? [];
+
+  return images
+    .filter((image) => {
+      if (!image.sourceUrl.startsWith('https://') && !image.sourceUrl.startsWith('http://')) {
+        return false;
+      }
+      const shortest = Math.min(image.width ?? Infinity, image.height ?? Infinity);
+      return shortest === Infinity || shortest >= TOO_SMALL_TO_SHOW;
+    })
+    .sort((a, b) => area(b) - area(a))
+    .slice(0, MAX_IMAGES_SHOWN)
+    .map((image) => image.sourceUrl);
+}
+
+/** Declared area, or zero when the page never said — which sorts it last. */
+function area(image: EvidenceImage): number {
+  return (image.width ?? 0) * (image.height ?? 0);
+}
+
+/**
  * What the pictures show, according to the merchant.
  *
  * Product images first, because an image attached to a product is evidence
@@ -218,6 +281,8 @@ const MAX_IMAGE_LINES = 40;
  * to read and which no vision model can improve on where it exists.
  */
 interface EvidenceImage {
+  /** Where it lives on the merchant's own site. Phase 2 stores the URL only. */
+  sourceUrl: string;
   altText: string | null;
   width: number | null;
   height: number | null;

@@ -160,6 +160,18 @@ So the arrangement is not free writing. It is:
 - **Never cached.** Prompt caching would be cheaper, and it is deliberately not
   used: every untrusted block is wrapped in a per-call random delimiter, so no
   two prompts share a prefix. Containment beats the discount.
+- **Shown the product, where there is one.** Writing about a single product
+  sends up to three of the merchant's own photographs by URL — nothing is
+  downloaded, since the images are already public and already served by their
+  own host. Each costs roughly 1,600 input tokens, about a third of a penny, and
+  the estimate counts them. They travel only with a single-product request,
+  because a picture is evidence about the thing in it and a mixed set from forty
+  products invites a confident description of the wrong one. Every URL is put
+  through the same gate that decides whether the crawler may fetch it, since
+  these came out of a stranger's HTML; an unusable one is dropped rather than
+  raised. And the system prompt says that writing inside an image is part of the
+  picture, never an instruction — an image is as capable of carrying "ignore
+  your instructions" as a product description is.
 - **Honest about failure.** A refusal is `PROVIDER_REJECTED` and final. Output
   that is not the requested shape is `AI_OUTPUT_INVALID`, which buys exactly one
   rephrased retry, because the retry is a second billed call.

@@ -7,7 +7,7 @@ import { logger } from '@/lib/logger';
 import { loadPaidProviderState, runProvider } from '@/server/providers';
 import { jsonSchemaOf } from '@/server/providers/output-schema';
 import { DEFAULT_MAX_OUTPUT_TOKENS, estimateCallCostCents } from '@/server/providers/pricing';
-import type { AIProvider } from '@/server/providers/types';
+import type { AIProvider, ProvidedImage } from '@/server/providers/types';
 import type { BusinessContext } from '@/server/tenancy/context';
 import {
   sanitiseExtractedText,
@@ -50,6 +50,13 @@ export interface GenerateOptions<TSchema extends ZodTypeAny> {
   /** Untrusted third-party content, keyed by a label the model can refer to. */
   data?: Record<string, string>;
   schema: TSchema;
+  /**
+   * Photographs of the one thing this is about.
+   *
+   * Only a provider that can see uses them; the free one ignores them entirely,
+   * which is why passing them changes nothing until a paid writer is switched on.
+   */
+  images?: ProvidedImage[];
   /** One line describing the input, for the decision record. */
   inputSummary: string;
   /** Verified fact ids this reasoning is built from. */
@@ -120,6 +127,9 @@ export async function generate<TSchema extends ZodTypeAny>(
         model: getEnv().ANTHROPIC_MODEL,
         promptChars: promptLengthOf(instruction, prepared.data),
         maxOutputTokens,
+        // Pictures bill as input tokens, so a ceiling checked without them
+        // would be checking a different call from the one about to be made.
+        imageCount: options.images?.length ?? 0,
       }),
       execute: (provider) =>
         provider.complete<z.infer<TSchema>>({
@@ -127,6 +137,7 @@ export async function generate<TSchema extends ZodTypeAny>(
           instruction,
           ...(prepared.data ? { data: prepared.data } : {}),
           maxOutputTokens,
+          ...(options.images?.length ? { images: options.images } : {}),
           outputSchema: jsonSchemaOf(schema),
           // Validation happens inside the provider call, so malformed output
           // never becomes a value anyone could accidentally use.

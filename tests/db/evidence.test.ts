@@ -315,6 +315,83 @@ describe('what the pictures show', () => {
     expect(evidence.imageText).not.toMatch(/\d+×\d+/);
   });
 
+  it('offers the biggest pictures to a writer that can see', async () => {
+    const { context, productId } = await businessWithProduct();
+    await prisma.productImage.createMany({
+      data: [
+        {
+          productId,
+          sourceUrl: 'https://example.com/img/badge.webp',
+          width: 48,
+          height: 48,
+          position: 0,
+        },
+        {
+          productId,
+          sourceUrl: 'https://example.com/img/hero.webp',
+          width: 1200,
+          height: 1200,
+          position: 1,
+        },
+        {
+          productId,
+          sourceUrl: 'https://example.com/img/side.webp',
+          width: 800,
+          height: 800,
+          position: 2,
+        },
+      ],
+    });
+
+    const evidence = await gatherEvidence(context, { productId });
+
+    // Biggest first, because the largest image on a product page is almost
+    // always the product. The 48×48 is a payment icon or a flag, and showing it
+    // buys a confident description of a padlock.
+    expect(evidence.imageUrls).toEqual([
+      'https://example.com/img/hero.webp',
+      'https://example.com/img/side.webp',
+    ]);
+  });
+
+  it('shows at most three, because each one is paid for', async () => {
+    const { context, productId } = await businessWithProduct();
+    await prisma.productImage.createMany({
+      data: Array.from({ length: 6 }, (_, index) => ({
+        productId,
+        sourceUrl: `https://example.com/img/${index}.webp`,
+        width: 1000 - index,
+        height: 1000,
+        position: index,
+      })),
+    });
+
+    const evidence = await gatherEvidence(context, { productId });
+    expect(evidence.imageUrls).toHaveLength(3);
+  });
+
+  it('offers none when the dossier covers the whole catalogue', async () => {
+    /*
+     * A picture is evidence about the thing in it. Handed a mixed set from every
+     * product, a writer cannot tell which is which and will describe the wrong
+     * one with total confidence — so the pictures travel only with a
+     * single-product request. The alt text above still covers the catalogue.
+     */
+    const { context, productId } = await businessWithProduct();
+    await prisma.productImage.create({
+      data: {
+        productId,
+        sourceUrl: 'https://example.com/img/hero.webp',
+        width: 1200,
+        height: 1200,
+        position: 0,
+      },
+    });
+
+    expect((await gatherEvidence(context)).imageUrls).toEqual([]);
+    expect((await gatherEvidence(context, { productId })).imageUrls).toHaveLength(1);
+  });
+
   it('is empty when the site describes none of its pictures', async () => {
     const { context } = await businessWithProduct();
     expect((await gatherEvidence(context)).imageText).toBe('');

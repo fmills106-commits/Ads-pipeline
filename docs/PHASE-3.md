@@ -164,8 +164,10 @@ page drives strategies and copy from the first product and first strategy
 rather than offering a picker. Adequate for a single-product test, thin for a
 catalogue.
 
-**No images.** Phase 4. Today this is text a merchant could copy and use by
-hand, which is genuinely useful and is not an ad campaign.
+**No images are _made_ here.** Phase 4. Today this is text a merchant could copy
+and use by hand, which is genuinely useful and is not an ad campaign. The paid
+writer does now _look_ at the merchant's existing photographs when writing about
+one product — that is reading, not generating.
 
 ## Corrections from the first real owner
 

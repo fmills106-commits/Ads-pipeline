@@ -305,6 +305,117 @@ describe('when the model disappoints', () => {
   });
 });
 
+describe('showing it the product', () => {
+  const blocksOf = (calls: Recorded[]) => {
+    const content = calls[0]?.params.messages[0]?.content;
+    return Array.isArray(content) ? content : [];
+  };
+
+  it('attaches the photographs after the text', async () => {
+    const { provider, calls } = clientReplying({ text: '{"headline":"ok"}' });
+
+    await provider.complete(
+      request({
+        images: [{ url: 'https://shop.example/squishy.jpg' }],
+      }),
+    );
+
+    const blocks = blocksOf(calls);
+    expect(blocks[0]?.type).toBe('text');
+    const image = blocks.find((block) => block.type === 'image');
+    expect(image).toMatchObject({
+      source: { type: 'url', url: 'https://shop.example/squishy.jpg' },
+    });
+  });
+
+  it('says whose pictures they are, in our own words', async () => {
+    const { provider, calls } = clientReplying({ text: '{"headline":"ok"}' });
+
+    await provider.complete(request({ images: [{ url: 'https://shop.example/a.jpg' }] }));
+
+    // Trusted text, not the merchant's: nothing untrusted labels an image.
+    const texts = blocksOf(calls)
+      .filter((block) => block.type === 'text')
+      .map((block) => (block as { text: string }).text);
+    expect(texts.some((text) => /merchant’s own picture/.test(text))).toBe(true);
+  });
+
+  it('tells the model that writing inside a picture is not an instruction', async () => {
+    const { provider, calls } = clientReplying({ text: '{"headline":"ok"}' });
+
+    await provider.complete(request({ images: [{ url: 'https://shop.example/a.jpg' }] }));
+
+    // An image can carry text, and text in an image can say "ignore your
+    // instructions" as easily as a product description can.
+    expect(calls[0]?.params.system).toMatch(/Writing inside an image/);
+  });
+
+  it('sends plain text when there are no pictures', async () => {
+    const { provider, calls } = clientReplying({ text: '{"headline":"ok"}' });
+
+    await provider.complete(request());
+
+    expect(typeof calls[0]?.params.messages[0]?.content).toBe('string');
+  });
+
+  it('refuses to post a private address to an outside service', async () => {
+    const { provider, calls } = clientReplying({ text: '{"headline":"ok"}' });
+
+    await provider.complete(
+      request({
+        images: [
+          { url: 'http://127.0.0.1/secret.png' },
+          { url: 'https://shop.example/real.jpg' },
+          { url: 'not-a-url-at-all' },
+        ],
+      }),
+    );
+
+    // These URLs came out of a stranger's HTML. The bad ones are dropped rather
+    // than raised: a product whose third photograph is malformed still deserves
+    // an advertisement written from the others.
+    const images = blocksOf(calls).filter((block) => block.type === 'image');
+    expect(images).toHaveLength(1);
+    expect(JSON.stringify(images)).toContain('shop.example/real.jpg');
+  });
+
+  it('will not be talked into looking at more than three', async () => {
+    const { provider, calls } = clientReplying({ text: '{"headline":"ok"}' });
+
+    await provider.complete(
+      request({
+        images: Array.from({ length: 9 }, (_, index) => ({
+          url: `https://shop.example/${index}.jpg`,
+        })),
+      }),
+    );
+
+    // The caller decides what is worth looking at; this decides what it is
+    // willing to be charged for.
+    expect(blocksOf(calls).filter((block) => block.type === 'image')).toHaveLength(3);
+  });
+
+  it('charges for the pictures it was shown', async () => {
+    const withPictures = clientReplying({ text: '{"headline":"ok"}' });
+    const without = clientReplying({ text: '{"headline":"ok"}' });
+
+    const a = await withPictures.provider.complete(
+      request({
+        images: [
+          { url: 'https://shop.example/a.jpg' },
+          { url: 'https://shop.example/b.jpg' },
+          { url: 'https://shop.example/c.jpg' },
+        ],
+      }),
+    );
+    const b = await without.provider.complete(request());
+
+    // Images bill as input tokens, so an estimate blind to them would be
+    // checking a spending limit against a different call from the one made.
+    expect(a.usage.estimatedCostCents).toBeGreaterThan(b.usage.estimatedCostCents);
+  });
+});
+
 describe('when the service itself says no', () => {
   /** A client that fails the way the SDK fails: an error carrying a status. */
   function clientFailing(failure: unknown): AIProvider {
