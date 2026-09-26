@@ -1,4 +1,5 @@
 import type { ProviderCapability, ProviderTier } from '@prisma/client';
+import type { ProviderSecrets } from './credentials';
 
 /**
  * The provider system.
@@ -37,10 +38,15 @@ export interface ProviderDescriptor {
    */
   priority: number;
   /**
-   * Whether the deployment has what this provider needs — an API key, a
-   * bucket. `false` means it cannot be selected however it is configured.
+   * Whether the credentials this provider needs exist — an API key, a bucket.
+   * `false` means it cannot be selected however it is enabled.
+   *
+   * Takes the credentials rather than reading the environment itself, because a
+   * key can now come from the environment *or* from the workspace that will be
+   * billed for it. A descriptor that read `process.env` directly could only ever
+   * see the operator's key and would report a workspace's own key as missing.
    */
-  isConfigured: () => boolean;
+  isConfigured: (secrets: ProviderSecrets) => boolean;
   /**
    * Whether an implementation actually exists behind this key.
    *

@@ -142,10 +142,18 @@ optional. Nothing in this phase changes shape when it is switched on: the same
 schemas, the same validation, the same decision records. What changes is that
 the copy is written rather than composed.
 
-It has never made a live call. Every branch of it is tested against a stand-in
-client — containment, token accounting, refusals, prose where JSON was asked
-for — but the first real request is still the first real request, and that is
-worth knowing before switching it on.
+What has and has not been proven against the live API, precisely:
+
+- **Proven.** One real request was made with a deliberately invalid key, which
+  is not billed. The SDK reached the API, and the rejection came back as
+  `PROVIDER_UNAUTHORIZED` with the owner-facing message about checking the key —
+  so the network path and the failure mapping are real, not stubbed.
+- **Not proven.** A 401 is refused before the request body is looked at, so the
+  parts that only an authenticated call exercises — the model name, the
+  structured-output schema, the token accounting against a real `usage` — have
+  never been accepted by the API. Every branch of them is tested against a
+  stand-in client, and the first successful request is still the first
+  successful request.
 
 **Product-level analysis is thin.** Business analysis reads across all
 products; per-product analysis producing motivations and objections is

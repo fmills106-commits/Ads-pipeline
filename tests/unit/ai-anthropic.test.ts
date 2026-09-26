@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type Anthropic from '@anthropic-ai/sdk';
 import { AppError } from '@/lib/errors';
 import { resetEnvCache } from '@/lib/env';
+import { NO_SECRETS } from '@/server/providers/credentials';
 import {
   createAnthropicAIProvider,
   type MessagesClient,
@@ -83,7 +84,7 @@ function clientReplying(reply: Reply): { provider: AIProvider; calls: Recorded[]
     },
   };
 
-  return { provider: createAnthropicAIProvider(client), calls };
+  return { provider: createAnthropicAIProvider({ client }), calls };
 }
 
 const copySchema = z.object({ headline: z.string().min(1).max(60) });
@@ -301,6 +302,77 @@ describe('when the model disappoints', () => {
     const { provider } = clientReplying({ text: '{"headline":""}' });
 
     await expect(provider.complete(request())).rejects.toThrow(z.ZodError);
+  });
+});
+
+describe('when the service itself says no', () => {
+  /** A client that fails the way the SDK fails: an error carrying a status. */
+  function clientFailing(failure: unknown): AIProvider {
+    return createAnthropicAIProvider({
+      client: {
+        messages: {
+          create: async () => {
+            throw failure;
+          },
+        },
+      },
+    });
+  }
+
+  const withStatus = (status: number): Error & { status: number } =>
+    Object.assign(new Error(`HTTP ${status}`), { status });
+
+  const codeOf = async (provider: AIProvider): Promise<string> => {
+    try {
+      await provider.complete(request());
+      return 'no error';
+    } catch (thrown) {
+      return thrown instanceof AppError ? thrown.code : `not an AppError: ${String(thrown)}`;
+    }
+  };
+
+  it('says the key was rejected, because that is the thing to fix', async () => {
+    /*
+     * The failure a new owner is most likely to hit, and the one where a generic
+     * "we could not generate that just now" wastes the most of their time: it
+     * says nothing about the key they just pasted.
+     */
+    expect(await codeOf(clientFailing(withStatus(401)))).toBe('PROVIDER_UNAUTHORIZED');
+    expect(await codeOf(clientFailing(withStatus(403)))).toBe('PROVIDER_UNAUTHORIZED');
+  });
+
+  it('tells an owner a rejected key cost them nothing', async () => {
+    try {
+      await clientFailing(withStatus(401)).complete(request());
+      expect.unreachable();
+    } catch (thrown) {
+      const message = thrown instanceof AppError ? thrown.publicMessage : '';
+      expect(message).toMatch(/key/i);
+      expect(message).toMatch(/nothing was charged/i);
+    }
+  });
+
+  it('separates being rate-limited from being refused', async () => {
+    expect(await codeOf(clientFailing(withStatus(429)))).toBe('PROVIDER_RATE_LIMITED');
+  });
+
+  it('blames the deployment, not the owner, for a bad request', async () => {
+    // A 400 with a working key is this build asking for something wrong — an
+    // unsupported parameter, a model the account cannot use. Telling the owner
+    // to check their key would send them after the wrong thing.
+    expect(await codeOf(clientFailing(withStatus(400)))).toBe('PROVIDER_ERROR');
+  });
+
+  it('reports a timeout as a timeout', async () => {
+    expect(await codeOf(clientFailing(new Error('Request timed out.')))).toBe('PROVIDER_TIMEOUT');
+  });
+
+  it('refuses to build itself with no key at all', () => {
+    // Unreachable through selection, which filters on the credentials. Kept
+    // because "unreachable" is a property of today's call sites.
+    expect(() => createAnthropicAIProvider({ secrets: NO_SECRETS })).toThrow(
+      /no anthropic api key/i,
+    );
   });
 });
 

@@ -217,6 +217,45 @@ will know before a bill does.
 
 ---
 
+## 7. Optional: paid writing
+
+Everything above runs on the free providers and will keep doing so. This step is
+the only one that can produce a bill, and it is two separate jobs.
+
+**The operator's part, once, in the hosting environment.** These cannot be set
+from the interface, on purpose — `ZERO_COST_MODE` is your promise that the
+deployment cannot spend money, and a screen that could revoke it would make the
+promise meaningless.
+
+| Variable                          | Set to      | Why                                        |
+| --------------------------------- | ----------- | ------------------------------------------ |
+| `ZERO_COST_MODE`                  | `false`     | Permission for anything paid to run at all |
+| `MAX_DAILY_PROVIDER_COST_CENTS`   | e.g. `100`  | The most it may spend in a day ($1.00)     |
+| `MAX_MONTHLY_PROVIDER_COST_CENTS` | e.g. `1000` | And in a calendar month ($10.00)           |
+
+Redeploy after changing them. With the mode off but both ceilings at zero,
+nothing paid can run — the amount and the permission are deliberately separate
+variables.
+
+**The owner's part, in Settings, needing no redeploy.** Get an API key from
+`console.anthropic.com` (it is prepaid credit, bought with a card), paste it into
+the box under **Claude (paid)**, then press **Turn on** and set a daily limit.
+
+Whoever supplies the key pays for it. Set `ANTHROPIC_API_KEY` in the environment
+and you are paying for every workspace; leave it unset and each owner pastes
+their own. A workspace's own key overrides the deployment's.
+
+What it costs, at the default model and this engine's own size limits: roughly
+2–4¢ each time it writes, so about 7¢ to take one product from analysis through
+to ad copy. The per-call ceiling of 50¢ is far above anything it should produce;
+if a call is ever refused for exceeding it, something is wrong, not expensive.
+
+To undo any of it: remove the key, switch the provider off, lower a ceiling, or
+set `ZERO_COST_MODE=true`. Any one of those is enough, and the application keeps
+working on the free providers.
+
+---
+
 ## What will go wrong first
 
 Honest list, roughly in order of likelihood.
@@ -236,6 +275,11 @@ fifteen minutes. Deliberate, and per-account rather than global.
 **A migration is forgotten.** Deploying code whose schema has changed without
 running `prisma migrate deploy` gives Prisma errors on the affected pages. CI
 checks that migrations match the schema, but nothing yet runs them for you.
+
+**A pasted key is rejected.** Anthropic's answer is reported as such — "would
+not accept the key… nothing was charged" — rather than as a generic failure, and
+the free writer keeps working meanwhile. The usual cause is a key copied with a
+trailing space or line break, which is refused before it is ever stored.
 
 ## What this does not have yet
 

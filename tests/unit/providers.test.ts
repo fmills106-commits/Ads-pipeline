@@ -11,6 +11,7 @@ import {
 } from '@/server/providers/registry';
 import { registerAllProviders, resetProviders } from '@/server/providers';
 import type { Provider, ProviderDescriptor } from '@/server/providers/types';
+import { NO_SECRETS } from '@/server/providers/credentials';
 
 /**
  * The selection rules are the mechanism behind "never silently call a paid
@@ -135,14 +136,20 @@ describe('capability summary', () => {
   afterEach(resetProviders);
 
   it('labels the active provider free or paid, so the UI can never hide it', () => {
-    const summary = summariseCapability('AI', NO_PAID_PROVIDERS, true);
+    const summary = summariseCapability('AI', {
+      enabledPaid: NO_PAID_PROVIDERS,
+      zeroCostMode: true,
+    });
 
     expect(summary.tier).toBe('LOCAL_FREE');
     expect(summary.activeLabel).toBe('Free AI');
   });
 
   it('lists paid alternatives with their configured and enabled state', () => {
-    const summary = summariseCapability('AI', enabled('test.ai.paid'), true);
+    const summary = summariseCapability('AI', {
+      enabledPaid: enabled('test.ai.paid'),
+      zeroCostMode: true,
+    });
 
     expect(summary.paidAlternatives).toEqual([
       {
@@ -171,7 +178,7 @@ describe('the real registry', () => {
       const free = listProviders(capability).filter((d) => d.tier === 'LOCAL_FREE');
       expect(free.length, capability).toBeGreaterThan(0);
       expect(
-        free.every((d) => d.isConfigured()),
+        free.every((d) => d.isConfigured(NO_SECRETS)),
         capability,
       ).toBe(true);
     }
@@ -190,6 +197,6 @@ describe('the real registry', () => {
     // clone is in.
     const paid = listProviders().filter((d) => d.tier === 'EXTERNAL_PAID');
     expect(paid.length).toBeGreaterThan(0);
-    expect(paid.every((d) => !d.isConfigured())).toBe(true);
+    expect(paid.every((d) => !d.isConfigured(NO_SECRETS))).toBe(true);
   });
 });

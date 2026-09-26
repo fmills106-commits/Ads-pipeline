@@ -51,6 +51,12 @@ export const AUDIT_ACTIONS = {
   /// generic update so "who let this spend money?" is one query.
   providerEnabled: 'provider.enabled',
   providerDisabled: 'provider.disabled',
+  /// A workspace stored or removed its own API key for a paid service. Distinct
+  /// from enabling it, because they are different acts with different blast
+  /// radii: one supplies the means to spend, the other grants permission. The
+  /// row records the last four characters of the key and never the key.
+  providerKeySet: 'provider.key_set',
+  providerKeyRemoved: 'provider.key_removed',
   /// The owner described a product, or told us what it costs them — the two
   /// things no page states and no extractor may infer.
   productDetailsEdited: 'product.details_edited',

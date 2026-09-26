@@ -6,6 +6,7 @@ import {
   createSimulatedAdvertisingProvider,
   resetSimulatedCampaigns,
 } from '@/server/providers/local/advertising';
+import { NO_SECRETS } from '@/server/providers/credentials';
 
 /**
  * The free implementations are what the $0 promise actually rests on, so they
@@ -18,7 +19,7 @@ describe('local AI provider', () => {
 
   it('is free and always available', () => {
     expect(ai.descriptor.tier).toBe('LOCAL_FREE');
-    expect(ai.descriptor.isConfigured()).toBe(true);
+    expect(ai.descriptor.isConfigured(NO_SECRETS)).toBe(true);
   });
 
   it('reports zero cost for every call', async () => {
@@ -115,7 +116,7 @@ describe('local image provider', () => {
 
   it('is free and always available', () => {
     expect(images.descriptor.tier).toBe('LOCAL_FREE');
-    expect(images.descriptor.isConfigured()).toBe(true);
+    expect(images.descriptor.isConfigured(NO_SECRETS)).toBe(true);
   });
 
   it('renders at the requested dimensions', async () => {
@@ -179,7 +180,7 @@ describe('simulated advertising provider', () => {
 
   it('is free and always available', () => {
     expect(ads.descriptor.tier).toBe('LOCAL_FREE');
-    expect(ads.descriptor.isConfigured()).toBe(true);
+    expect(ads.descriptor.isConfigured(NO_SECRETS)).toBe(true);
   });
 
   it('marks every campaign it creates as not real', async () => {

@@ -1,9 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { jsonSchemaOutputFormat } from '@anthropic-ai/sdk/helpers/json-schema';
 import { AppError } from '@/lib/errors';
-import { externalCredentials, getEnv } from '@/lib/env';
+import { getEnv } from '@/lib/env';
 import { logger } from '@/lib/logger';
 import { buildContainedPrompt } from '../prompt';
+import { secretsFromEnvironment, type ProviderSecrets } from '../credentials';
 import {
   approximateTokens,
   costOf,
@@ -62,7 +63,10 @@ const DESCRIPTOR: ProviderDescriptor = {
   description:
     'Writes strategy and ad copy from what was read on your website, instead of composing it from templates. Billed by Anthropic — usually a few cents each time it writes. Off unless you switch it on.',
   priority: 10,
-  isConfigured: () => externalCredentials().anthropic,
+  // The key may be the deployment's or the owner's own; this asks the resolved
+  // credentials rather than the environment, so a key pasted into Settings
+  // counts. See `providers/credentials.ts` for which one wins.
+  isConfigured: (secrets) => Boolean(secrets.anthropicApiKey),
 };
 
 /**
@@ -134,32 +138,29 @@ class AnthropicAIProvider implements AIProvider {
       ? buildContainedPrompt(request.instruction, request.data)
       : { prompt: request.instruction };
 
-    const response = await this.client.messages.create(
-      {
-        model,
-        max_tokens: maxOutputTokens,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: prompt }],
-        /*
-         * Constrains generation to the caller's shape, so a response that
-         * cannot be validated is mostly designed out rather than retried.
-         * Worth it here specifically because the retry costs money: the
-         * engine's one repair attempt is a second billed call.
-         */
-        ...(request.outputSchema
-          ? { output_config: { format: outputFormat(request.outputSchema) } }
-          : {}),
-        /*
-         * No `cache_control` anywhere, deliberately. Prompt caching pays only
-         * when consecutive calls share a prefix, and these never do: each data
-         * block is wrapped in a per-call random delimiter so that page text
-         * cannot close its own block. That containment is worth more than the
-         * discount, and marking blocks cacheable while every prefix differs
-         * would add the cache-write surcharge and earn nothing back.
-         */
-      },
-      { timeout: TIMEOUT_MS },
-    );
+    const response = await this.send({
+      model,
+      max_tokens: maxOutputTokens,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: prompt }],
+      /*
+       * Constrains generation to the caller's shape, so a response that cannot
+       * be validated is mostly designed out rather than retried. Worth it here
+       * specifically because the retry costs money: the engine's one repair
+       * attempt is a second billed call.
+       */
+      ...(request.outputSchema
+        ? { output_config: { format: outputFormat(request.outputSchema) } }
+        : {}),
+      /*
+       * No `cache_control` anywhere, deliberately. Prompt caching pays only
+       * when consecutive calls share a prefix, and these never do: each data
+       * block is wrapped in a per-call random delimiter so that page text
+       * cannot close its own block. That containment is worth more than the
+       * discount, and marking blocks cacheable while every prefix differs
+       * would add the cache-write surcharge and earn nothing back.
+       */
+    });
 
     /*
      * A refusal is not a malformed response and rephrasing will not fix it, so
@@ -202,6 +203,103 @@ class AnthropicAIProvider implements AIProvider {
       throw thrown;
     }
   }
+
+  /**
+   * Makes the call, and translates the ways it can fail.
+   *
+   * This exists for one owner-facing reason. Setting a key up is the step most
+   * likely to go wrong — a key pasted with a trailing character, a key from the
+   * wrong account, a key whose credit has run out — and an unmapped SDK
+   * exception would surface as "We could not generate that just now", which
+   * tells the owner nothing about the one thing they could fix.
+   *
+   * None of these are retried here. The SDK already retries what is worth
+   * retrying, and a second attempt at a rejected key is a second rejection.
+   */
+  private async send(
+    params: Anthropic.Messages.MessageCreateParamsNonStreaming,
+  ): Promise<Anthropic.Messages.Message> {
+    try {
+      return await this.client.messages.create(params, { timeout: TIMEOUT_MS });
+    } catch (thrown) {
+      throw translate(thrown);
+    }
+  }
+}
+
+/** What the failure was, in terms of what the owner can do about it. */
+function translate(thrown: unknown): unknown {
+  if (thrown instanceof AppError) return thrown;
+
+  const status = statusOf(thrown);
+
+  if (status === 401 || status === 403) {
+    return new AppError('PROVIDER_UNAUTHORIZED', 'Anthropic rejected the API key', {
+      cause: thrown,
+      retryable: false,
+      publicMessage:
+        'Anthropic would not accept the key for the paid writing service. Check it in Settings — nothing was charged, and your free version is still working.',
+    });
+  }
+
+  if (status === 429) {
+    return new AppError('PROVIDER_RATE_LIMITED', 'Anthropic rate-limited this key', {
+      cause: thrown,
+      retryable: true,
+      publicMessage:
+        'The paid writing service is busy or over its rate limit. Try again shortly; nothing has been changed.',
+    });
+  }
+
+  /*
+   * 400 with a key present is usually a request this build got wrong — an
+   * unsupported parameter, or a model name the account cannot use. Said plainly
+   * as "this deployment asked for something Anthropic refused", because telling
+   * an owner to check their key when the key is fine wastes their afternoon.
+   */
+  if (status === 400 || status === 404 || status === 422) {
+    return new AppError('PROVIDER_ERROR', 'Anthropic refused the request', {
+      cause: thrown,
+      retryable: false,
+      details: { status },
+      publicMessage:
+        'The paid writing service refused this request. This is a problem with how this deployment is configured, not with your key or your website.',
+    });
+  }
+
+  if (isTimeout(thrown)) {
+    return new AppError('PROVIDER_TIMEOUT', 'Anthropic did not answer in time', {
+      cause: thrown,
+      retryable: true,
+      publicMessage: 'The paid writing service took too long. Nothing has been changed.',
+    });
+  }
+
+  return new AppError('PROVIDER_ERROR', 'The call to Anthropic failed', {
+    cause: thrown,
+    retryable: true,
+    ...(status === undefined ? {} : { details: { status } }),
+    publicMessage: 'The paid writing service could not be reached. Nothing has been changed.',
+  });
+}
+
+/**
+ * The HTTP status, when there was one.
+ *
+ * Read structurally rather than with `instanceof`, because the SDK's error
+ * classes are not part of what a stand-in client has to imitate: a test that
+ * has to construct a real `AuthenticationError` to check the 401 path is
+ * testing the SDK, not this adapter.
+ */
+function statusOf(thrown: unknown): number | undefined {
+  if (typeof thrown !== 'object' || thrown === null) return undefined;
+  const status = (thrown as { status?: unknown }).status;
+  return typeof status === 'number' ? status : undefined;
+}
+
+function isTimeout(thrown: unknown): boolean {
+  if (!(thrown instanceof Error)) return false;
+  return /timeout|timed out|aborted/i.test(`${thrown.name} ${thrown.message}`);
 }
 
 /**
@@ -307,23 +405,31 @@ function accountFor(
 /**
  * Builds the provider.
  *
- * A client can be supplied, which is how the tests drive it. Left out, one is
- * constructed from the environment — and the key is read here, at the moment of
- * use, rather than captured at module load, so that a deployment which removes
- * the key stops being able to spend without a redeploy.
+ * Takes either the resolved credentials — which is how it is registered, and
+ * which is what lets the key come from the workspace rather than the
+ * environment — or a client, which is how the tests drive it without a key and
+ * without spending anything.
+ *
+ * The key is read at the moment of use rather than captured at module load, so
+ * removing it takes effect on the next call rather than on the next deploy.
  */
-export function createAnthropicAIProvider(client?: MessagesClient): AIProvider {
-  return new AnthropicAIProvider(client ?? fromEnvironment());
+export function createAnthropicAIProvider(
+  source: { secrets?: ProviderSecrets; client?: MessagesClient } = {},
+): AIProvider {
+  return new AnthropicAIProvider(
+    source.client ?? clientFor(source.secrets ?? secretsFromEnvironment()),
+  );
 }
 
-function fromEnvironment(): MessagesClient {
-  const apiKey = getEnv().ANTHROPIC_API_KEY;
+function clientFor(secrets: ProviderSecrets): MessagesClient {
+  const apiKey = secrets.anthropicApiKey;
   if (!apiKey) {
-    // Unreachable through selection, which filters on `isConfigured()`. Kept
-    // because "unreachable" is a property of today's call sites, and a paid
+    // Unreachable through selection, which filters on `isConfigured(secrets)`.
+    // Kept because "unreachable" is a property of today's call sites, and a paid
     // provider constructing itself without credentials should stop, loudly.
-    throw new AppError('CONFIGURATION_ERROR', 'ANTHROPIC_API_KEY is not set', {
-      publicMessage: 'The paid writing service is not configured in this deployment.',
+    throw new AppError('CONFIGURATION_ERROR', 'No Anthropic API key is configured', {
+      publicMessage:
+        'No key for the paid writing service is configured. Add one in Settings, or in this deployment’s environment.',
     });
   }
 

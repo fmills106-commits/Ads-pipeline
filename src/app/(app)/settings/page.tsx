@@ -5,8 +5,9 @@ import type { ProviderCapability } from '@prisma/client';
 import { Card, PageHeader, cx } from '@/components/ui/primitives';
 import { requireCurrentUser } from '@/server/auth/current-user';
 import { summariseCapability } from '@/server/providers';
-import { loadEnabledPaidProviders } from '@/server/providers/run';
+import { loadPaidProviderState } from '@/server/providers/run';
 import { listProviderSettings, paidSpendPossible, whyBlocked } from '@/server/providers/settings';
+import { acceptsOwnerKey } from '@/server/providers/credentials';
 import { costSummary } from '@/server/cost/ledger';
 import { AUTOMATION_CHOICES, GOAL_CHOICES } from '@/server/business/onboarding';
 import { formatBudget, formatCents } from '@/lib/budget';
@@ -48,16 +49,19 @@ export default async function SettingsPage() {
     return <PageHeader title="Settings" description="Your account has no workspace." />;
   }
 
-  const [enabledPaid, costs, providerSettings] = await Promise.all([
-    loadEnabledPaidProviders(context.workspace.id),
+  const [{ enabledPaid, secrets }, costs, providerSettings] = await Promise.all([
+    loadPaidProviderState(context.workspace.id),
     costSummary(context.workspace.id),
     listProviderSettings(context),
   ]);
 
   const settingsByKey = new Map(providerSettings.map((row) => [row.providerKey, row]));
-  const paidPossible = paidSpendPossible();
+  // Every reading below is from this workspace's point of view, credentials
+  // included: an owner with their own key stored must not be told that none is
+  // configured just because the deployment itself has none.
+  const paidPossible = paidSpendPossible(secrets);
   const capabilities = VISIBLE_CAPABILITIES.map((capability) =>
-    summariseCapability(capability, enabledPaid),
+    summariseCapability(capability, { enabledPaid, secrets }),
   );
 
   return (
@@ -177,9 +181,16 @@ export default async function SettingsPage() {
                       label={alternative.label}
                       description={alternative.description}
                       enabled={alternative.enabled}
-                      blockedMessage={whyBlocked(alternative.key)?.message ?? null}
+                      blockedMessage={whyBlocked(alternative.key, secrets)?.message ?? null}
+                      blockedReason={whyBlocked(alternative.key, secrets)?.reason ?? null}
                       maxDailyCostCents={
                         settingsByKey.get(alternative.key)?.maxDailyCostCents ?? null
+                      }
+                      acceptsOwnKey={acceptsOwnerKey(alternative.key)}
+                      ownKeyHint={settingsByKey.get(alternative.key)?.secretHint ?? null}
+                      keyFromEnvironment={
+                        secrets.sources.anthropic === 'environment' &&
+                        alternative.key === 'ai.anthropic'
                       }
                     />
                   )),

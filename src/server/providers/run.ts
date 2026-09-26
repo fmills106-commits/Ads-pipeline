@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger';
 import { toAppError } from '@/lib/errors';
 import { checkBudget, costLimitError, recordCost } from '@/server/cost/ledger';
 import { NO_CEILINGS, selectProvider, type EnabledPaidProviders, type Selection } from './registry';
+import { loadProviderSecrets, type ProviderSecrets } from './credentials';
 import type { Provider, ProviderResult } from './types';
 
 /**
@@ -30,6 +31,13 @@ export interface RunProviderOptions<P extends Provider, T> {
   businessId?: string | null;
   /** Which paid providers this workspace has switched on. */
   enabledPaid?: EnabledPaidProviders;
+  /**
+   * The credentials in force, which may be the workspace's own rather than the
+   * deployment's. Left out, only the environment is consulted — which would
+   * quietly ignore a key its owner pasted into Settings, so every real call site
+   * passes them (see `loadPaidProviderState`).
+   */
+  secrets?: ProviderSecrets;
   /** Per-provider ceilings from `provider_settings`, when configured. */
   providerDailyCents?: number | null;
   providerMonthlyCents?: number | null;
@@ -73,6 +81,7 @@ export async function runProvider<P extends Provider, T>(
   const selectionOptions = {
     capability: options.capability,
     ...(options.enabledPaid ? { enabledPaid: options.enabledPaid } : {}),
+    ...(options.secrets ? { secrets: options.secrets } : {}),
   };
   let selection: Selection = selectProvider(selectionOptions);
   let fellBackBecause: string | undefined;
@@ -191,6 +200,33 @@ export async function runProvider<P extends Provider, T>(
     });
     throw error;
   }
+}
+
+/**
+ * Everything about a workspace that decides whether, and with whose key, a paid
+ * provider may run.
+ *
+ * One function because it is one question asked at one moment, and because both
+ * halves come out of the same table: forgetting either is a bug that looks like
+ * a working call. Omitting the credentials silently ignores a key its owner
+ * pasted into Settings and runs the free provider instead — which is the exact
+ * failure this whole feature exists to remove.
+ */
+export interface PaidProviderState {
+  enabledPaid: EnabledPaidProviders;
+  secrets: ProviderSecrets;
+}
+
+export async function loadPaidProviderState(
+  workspaceId: string,
+  db: Db = prisma,
+): Promise<PaidProviderState> {
+  const [enabledPaid, secrets] = await Promise.all([
+    loadEnabledPaidProviders(workspaceId, db),
+    loadProviderSecrets(workspaceId, db),
+  ]);
+
+  return { enabledPaid, secrets };
 }
 
 /**

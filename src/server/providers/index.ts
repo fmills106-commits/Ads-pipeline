@@ -50,14 +50,16 @@ export function registerAllProviders(): void {
   registerProvider(localImageDescriptor, createLocalImageProvider);
   registerProvider(localStorageDescriptor, createLocalStorageProvider);
   registerProvider(simulatedAdvertisingDescriptor, createSimulatedAdvertisingProvider);
-  registerProvider(localWebFetchDescriptor, createLocalWebFetchProvider);
+  // Wrapped, not passed: this factory takes a URL policy, and handing it the
+  // credentials bag would silently read as one.
+  registerProvider(localWebFetchDescriptor, () => createLocalWebFetchProvider());
 
   // --- Paid alternatives: declared, configured-or-not, never on by default --
   //
   // The AI one is the only paid provider with an adapter behind it. It is still
   // unreachable until zero-cost mode is off, a ceiling is raised, and the
   // workspace switches it on — registering it changes nothing about that.
-  registerProvider(anthropicAIDescriptor, createAnthropicAIProvider);
+  registerProvider(anthropicAIDescriptor, (secrets) => createAnthropicAIProvider({ secrets }));
 
   registerProvider(
     {
@@ -144,4 +146,11 @@ export {
   type CapabilityStatus,
   type EnabledPaidProviders,
 } from './registry';
-export { runProvider, loadEnabledPaidProviders } from './run';
+export { runProvider, loadEnabledPaidProviders, loadPaidProviderState } from './run';
+export {
+  acceptsOwnerKey,
+  loadProviderSecrets,
+  secretsFromEnvironment,
+  NO_SECRETS,
+  type ProviderSecrets,
+} from './credentials';

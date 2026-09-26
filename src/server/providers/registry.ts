@@ -1,6 +1,7 @@
 import type { ProviderCapability } from '@prisma/client';
 import { AppError } from '@/lib/errors';
 import { isZeroCostMode } from '@/lib/env';
+import { secretsFromEnvironment, type ProviderSecrets } from './credentials';
 import type { Provider, ProviderDescriptor, ProviderKey } from './types';
 
 /**
@@ -15,12 +16,23 @@ import type { Provider, ProviderDescriptor, ProviderKey } from './types';
 
 interface Registration {
   descriptor: ProviderDescriptor;
-  create: () => Provider;
+  /**
+   * Builds the implementation, given the credentials in force.
+   *
+   * The free providers ignore the argument; a paid one needs the actual secret,
+   * which may have come from the workspace rather than the environment. Handed
+   * in at construction rather than read inside, so a provider cannot quietly
+   * reach past the resolution rules to `process.env`.
+   */
+  create: (secrets: ProviderSecrets) => Provider;
 }
 
 const registrations = new Map<ProviderKey, Registration>();
 
-export function registerProvider(descriptor: ProviderDescriptor, create: () => Provider): void {
+export function registerProvider(
+  descriptor: ProviderDescriptor,
+  create: (secrets: ProviderSecrets) => Provider,
+): void {
   if (registrations.has(descriptor.key)) {
     throw new Error(`Provider "${descriptor.key}" is already registered`);
   }
@@ -78,6 +90,13 @@ export interface SelectionContext {
   capability: ProviderCapability;
   enabledPaid?: EnabledPaidProviders;
   /**
+   * The credentials in force, which may include a key the workspace supplied
+   * itself. Left out, only the deployment's environment is consulted — correct
+   * for a preview that has no workspace in hand, and wrong for a real call,
+   * which is why `runProvider` always passes them.
+   */
+  secrets?: ProviderSecrets;
+  /**
    * Overrides `ZERO_COST_MODE` for this selection. Only used by tests and by
    * the Settings preview; normal call sites leave it undefined.
    */
@@ -111,6 +130,7 @@ export interface Selection {
 export function selectProvider(context: SelectionContext): Selection {
   const zeroCost = context.zeroCostMode ?? isZeroCostMode();
   const enabledPaid = context.enabledPaid ?? NO_PAID_PROVIDERS;
+  const secrets = context.secrets ?? secretsFromEnvironment();
 
   /*
    * `implemented === false` is a descriptor whose adapter is not written yet;
@@ -118,7 +138,7 @@ export function selectProvider(context: SelectionContext): Selection {
    * never be chosen however it is configured or enabled.
    */
   const candidates = listProviders(context.capability).filter(
-    (d) => d.implemented !== false && d.isConfigured(),
+    (d) => d.implemented !== false && d.isConfigured(secrets),
   );
   const free = candidates.filter((d) => d.tier === 'LOCAL_FREE');
   const paid = candidates.filter((d) => d.tier === 'EXTERNAL_PAID');
@@ -138,7 +158,7 @@ export function selectProvider(context: SelectionContext): Selection {
   if (zeroCost) {
     return {
       descriptor: freeChoice,
-      provider: instantiate(freeChoice.key),
+      provider: instantiate(freeChoice.key, secrets),
       reason: 'zero-cost-mode',
     };
   }
@@ -149,24 +169,24 @@ export function selectProvider(context: SelectionContext): Selection {
   if (paidChoice && paidChoice.priority >= freeChoice.priority) {
     return {
       descriptor: paidChoice,
-      provider: instantiate(paidChoice.key),
+      provider: instantiate(paidChoice.key, secrets),
       reason: 'paid-enabled',
     };
   }
 
   return {
     descriptor: freeChoice,
-    provider: instantiate(freeChoice.key),
+    provider: instantiate(freeChoice.key, secrets),
     reason: paid.length > 0 ? 'paid-not-enabled' : 'only-free-available',
   };
 }
 
-function instantiate(key: ProviderKey): Provider {
+function instantiate(key: ProviderKey, secrets: ProviderSecrets): Provider {
   const registration = registrations.get(key);
   if (!registration) {
     throw new AppError('CONFIGURATION_ERROR', `Provider "${key}" is not registered`);
   }
-  return registration.create();
+  return registration.create(secrets);
 }
 
 /**
@@ -190,15 +210,27 @@ export interface CapabilityStatus {
   }>;
 }
 
+export interface SummaryOptions {
+  enabledPaid?: EnabledPaidProviders;
+  /** The workspace's credentials, so Settings reports the owner's key as present. */
+  secrets?: ProviderSecrets;
+  zeroCostMode?: boolean;
+}
+
 export function summariseCapability(
   capability: ProviderCapability,
-  enabledPaid: EnabledPaidProviders = NO_PAID_PROVIDERS,
-  zeroCostMode?: boolean,
+  options: SummaryOptions = {},
 ): CapabilityStatus {
+  const enabledPaid = options.enabledPaid ?? NO_PAID_PROVIDERS;
+  // Same default as selection: no argument means "whatever this deployment
+  // itself has". A workspace's own key is never assumed, only passed.
+  const secrets = options.secrets ?? secretsFromEnvironment();
+
   const selection = selectProvider({
     capability,
     enabledPaid,
-    ...(zeroCostMode === undefined ? {} : { zeroCostMode }),
+    secrets,
+    ...(options.zeroCostMode === undefined ? {} : { zeroCostMode: options.zeroCostMode }),
   });
 
   return {
@@ -213,7 +245,7 @@ export function summariseCapability(
         key: d.key,
         label: d.label,
         description: d.description,
-        configured: d.isConfigured(),
+        configured: d.isConfigured(secrets),
         enabled: enabledPaid.has(d.key),
       })),
   };

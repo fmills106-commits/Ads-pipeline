@@ -4,7 +4,7 @@ import { prisma, type Db } from '@/lib/db';
 import { getEnv } from '@/lib/env';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
-import { loadEnabledPaidProviders, runProvider } from '@/server/providers';
+import { loadPaidProviderState, runProvider } from '@/server/providers';
 import { jsonSchemaOf } from '@/server/providers/output-schema';
 import { DEFAULT_MAX_OUTPUT_TOKENS, estimateCallCostCents } from '@/server/providers/pricing';
 import type { AIProvider } from '@/server/providers/types';
@@ -88,7 +88,13 @@ export async function generate<TSchema extends ZodTypeAny>(
     log.warn('Untrusted input resembles an instruction', { signals: prepared.signals });
   }
 
-  const enabledPaid = await loadEnabledPaidProviders(context.workspace.id);
+  /*
+   * Both halves, from one query. The credentials matter as much as the switch:
+   * without them a key the owner pasted into Settings would be invisible here,
+   * and every write would quietly run on the free provider while the screen said
+   * the paid one was on.
+   */
+  const { enabledPaid, secrets } = await loadPaidProviderState(context.workspace.id);
   const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
   /** One attempt, through the provider guard so the call is priced and logged. */
@@ -99,6 +105,7 @@ export async function generate<TSchema extends ZodTypeAny>(
       workspaceId: context.workspace.id,
       businessId: context.businessId,
       enabledPaid,
+      secrets,
       subjectType: 'AiDecision',
       subjectId: label,
       /*

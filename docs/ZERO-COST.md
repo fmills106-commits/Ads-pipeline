@@ -170,18 +170,59 @@ make, not a default to be quietly generous with.
 
 ---
 
+## Whose key, and who is paying
+
+A credential can come from two places, and the difference is who gets the bill:
+
+| Source          | Set in                   | Who pays               |
+| --------------- | ------------------------ | ---------------------- |
+| **Environment** | `ANTHROPIC_API_KEY`      | whoever runs the depl. |
+| **Workspace**   | Settings → paste the key | the owner of that ws.  |
+
+The workspace's own key wins where both exist. It is the more specific of the
+two and the one its owner can see and change, so silently preferring the
+operator's key — and their bill — would be the wrong way round.
+
+Stored keys are encrypted with `encryptSecret`, bound by their authenticated
+additional data to one workspace and one provider, so a row copied elsewhere
+fails to decrypt rather than yielding a key someone else is paying for. Only the
+last four characters are kept in the clear, as a hint. **There is no read path**:
+no route, no action and no function returns a stored key, and the audit log
+records the hint only.
+
+A key that cannot be decrypted — a rotated `ENCRYPTION_KEY`, a database restored
+into another deployment — is treated as absent and logged loudly. The work goes
+to the free provider and the owner can see their key needs re-entering; failing
+every call instead would take down a feature that is optional by design.
+
+This exists because the middle step below used to be a wall: open the hosting
+platform's environment-variable panel, paste a secret into a form that cannot
+tell a good paste from a bad one, and redeploy. It is the step that broke this
+project's own deployment once, and it is not a thing a shop owner should have to
+do to switch on a feature.
+
+---
+
 ## Upgrading to a paid provider
 
-1. Put the credential in the environment. **Nothing happens** — the provider
-   becomes _available_, not active.
-2. Set `ZERO_COST_MODE=false`.
-3. Raise a cost ceiling above zero.
-4. Enable that specific provider for the workspace.
+The deployment's operator, once:
 
-At every stage, Settings shows which implementation is serving each capability
-and whether it is `Local / free` or `External / paid`.
+1. Set `ZERO_COST_MODE=false`.
+2. Raise a cost ceiling above zero.
 
-Downgrading is removing any one of those. The application keeps working.
+Neither of those is available in the interface, deliberately: zero-cost mode is
+the operator's promise that this deployment cannot spend money, and a screen that
+could revoke it would make the promise worthless.
+
+Then, per workspace, in Settings and needing no redeploy:
+
+3. Paste the API key — or leave it, if the deployment supplies one.
+4. Switch that specific provider on, with a daily limit.
+
+Each of the four is independent, and Settings names whichever one is missing.
+Downgrading is undoing any one of them: remove the key, switch it off, lower the
+ceiling, or turn zero-cost mode back on. The application keeps working
+throughout, on the free providers.
 
 ---
 

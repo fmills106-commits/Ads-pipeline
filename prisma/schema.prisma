@@ -386,6 +386,16 @@ model ProviderSetting {
   enabledBy String?   @db.Uuid
   enabledAt DateTime?
 
+  /// This workspace's own credential for the provider, encrypted at rest by
+  /// `encryptSecret` and bound to this workspace and provider key. Null means
+  /// the deployment's environment supplies the credential, or nothing does.
+  secretCiphertext String?
+  /// Last four characters of the key, so an owner can recognise which one is
+  /// installed. Never the key itself.
+  secretHint       String?
+  secretSetBy      String?   @db.Uuid
+  secretSetAt      DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
