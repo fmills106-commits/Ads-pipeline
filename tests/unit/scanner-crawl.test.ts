@@ -5,7 +5,8 @@ import type { WebFetchProvider } from '@/server/providers/types';
 import { AppError } from '@/lib/errors';
 import type { UrlPolicy } from '@/lib/net-safety';
 import { startFixtureSite, type FixtureSite } from '../helpers/fixture-site';
-import { pausedSince } from '@/server/scanner/job';
+import { describeHttpStatus, pausedSince } from '@/server/scanner/job';
+import { getEnv } from '@/lib/env';
 
 /**
  * The crawler, against a real HTTP server on a real socket.
@@ -431,5 +432,42 @@ describe('a pause during a crawl, versus one already in force', () => {
 
   it('does not stop when nothing is paused', () => {
     expect(pausedSince(null, startedAt)).toBe(false);
+  });
+});
+
+describe('what an owner is told when their site refuses us', () => {
+  /*
+   * A real site behind Cloudflare answered 403 to the crawl, and the message
+   * was "The website answered with an error (403)." Accurate, and useless: it
+   * described an HTTP status to somebody who does not read HTTP statuses, and
+   * offered nothing to do about it. On a site the owner controls, a 403 is
+   * nearly always bot protection in front of it — a setting they can change,
+   * once they know that is what they are looking at.
+   */
+  it('explains a refusal and names the visitor to allow', () => {
+    const message = describeHttpStatus('403');
+
+    expect(message).toMatch(/firewall|bot protection/i);
+    expect(message).toContain(getEnv().CRAWLER_USER_AGENT);
+    // Not just the number and a full stop.
+    expect(message.length).toBeGreaterThan(80);
+  });
+
+  it('treats 401 the same way', () => {
+    expect(describeHttpStatus('401')).toMatch(/bot protection/i);
+  });
+
+  it('does not blame the owner for the site being down', () => {
+    const message = describeHttpStatus('503');
+    expect(message).toMatch(/at the site's end, not ours/);
+    expect(message).not.toMatch(/firewall/i);
+  });
+
+  it('points a 404 at the address', () => {
+    expect(describeHttpStatus('404')).toMatch(/Check the address/);
+  });
+
+  it('still says something useful for a status it has no advice for', () => {
+    expect(describeHttpStatus('418')).toContain('418');
   });
 });

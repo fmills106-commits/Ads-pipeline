@@ -307,13 +307,57 @@ function describeUnreachable(crawl: CrawlResult): string {
   }
 
   if (warning.reason.startsWith('http-')) {
-    const code = warning.reason.slice(5);
-    return code === '404'
-      ? 'That page was not found on the website (404). Check the address.'
-      : `The website answered with an error (${code}).`;
+    return describeHttpStatus(warning.reason.slice(5));
   }
 
   return warning.detail ?? 'The website could not be read.';
+}
+
+/**
+ * An HTTP status, in terms of what the owner can do about it.
+ *
+ * `The website answered with an error (403)` was accurate and worthless: it
+ * described the symptom to somebody who cannot read an HTTP status code, and
+ * left them with nowhere to go. A 403 on a site the owner controls almost
+ * always means a firewall or bot protection in front of it refused us — which
+ * is a setting they can change, once they know that is what it is.
+ *
+ * The user agent is named because that is the string they need to allow, and
+ * guessing it is not something an owner should have to do.
+ */
+export function describeHttpStatus(code: string): string {
+  const agent = getEnv().CRAWLER_USER_AGENT;
+
+  switch (code) {
+    case '401':
+    case '403':
+      return (
+        'The website refused us (' +
+        code +
+        '). This is almost always a firewall or bot protection in front of the ' +
+        'site rather than a problem with the site itself — Cloudflare’s bot ' +
+        'protection does it by default. Allow the visitor named “' +
+        agent +
+        '” in that service’s settings, then read the site again.'
+      );
+    case '404':
+      return 'That page was not found on the website (404). Check the address.';
+    case '429':
+      return (
+        'The website asked us to slow down (429). We already wait between ' +
+        'pages, so this usually means rate limiting in front of the site. ' +
+        'Allowing “' +
+        agent +
+        '” there, or trying again later, should fix it.'
+      );
+    case '500':
+    case '502':
+    case '503':
+    case '504':
+      return `The website itself returned an error (${code}). That is a problem at the site's end, not ours — try again once it is back.`;
+    default:
+      return `The website answered with an error (${code}), so there was nothing to read.`;
+  }
 }
 
 /**
