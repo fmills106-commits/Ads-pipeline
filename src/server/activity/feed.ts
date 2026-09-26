@@ -27,6 +27,7 @@ import type { BusinessContext } from '@/server/tenancy/context';
 /** Event kinds, with the icon and default severity the UI renders. */
 export const ACTIVITY_KINDS = {
   websiteScanned: { icon: '🔍', severity: 'INFO' },
+  websiteChanged: { icon: '🔁', severity: 'NOTICE' },
   productsFound: { icon: '📦', severity: 'INFO' },
   analysisReady: { icon: '🧠', severity: 'INFO' },
   strategiesGenerated: { icon: '🤖', severity: 'INFO' },

@@ -211,9 +211,9 @@ function describeStage(phase: string, websiteUrl: string | null): Stage {
   if (websiteUrl === null) {
     return {
       value: 'Needs your website',
-      note: 'Add it in Settings',
+      note: 'Add it on the Website page',
       tone: 'pending',
-      next: 'Add your website address in Settings and we will read it to learn what you sell.',
+      next: 'Add your website address on the Website page and we will read it to learn what you sell.',
     };
   }
 
@@ -232,7 +232,7 @@ function describeStage(phase: string, websiteUrl: string | null): Stage {
         value: 'Needs your attention',
         note: 'We could not read your site',
         tone: 'danger',
-        next: 'We could not read your website. Check the address in Settings, then try again from the Website page.',
+        next: 'We could not read your website. Check the address on the Website page, then try reading it again.',
       };
 
     case 'done':

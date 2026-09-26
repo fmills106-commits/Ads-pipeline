@@ -124,6 +124,34 @@ describe('onboarding', () => {
     expect(entry?.message).not.toMatch(/OUTCOME_|CENTS|automationMode/);
   });
 
+  it('announces finishing setup once, however many times it is submitted', async () => {
+    const context = await newBusiness();
+    const answers = {
+      goal: 'SALES',
+      budgetAmountCents: 1_000,
+      budgetPeriod: 'DAILY',
+      automationMode: 'AUTOPILOT',
+    } as const;
+
+    await completeOnboarding(context, answers);
+    // A double-clicked Finish button, or a form resubmitted after a slow
+    // response. The write is legitimate both times; the milestone is not.
+    const second = await requireBusinessContext(context.user, context.businessId);
+    await completeOnboarding(second, answers);
+
+    const milestones = (await recentActivity(context)).filter(
+      (item) => item.kind === 'onboardingCompleted',
+    );
+    expect(milestones).toHaveLength(1);
+
+    // The audit log still has both, because both really wrote to the business.
+    expect(
+      await prisma.auditLog.count({
+        where: { businessId: context.businessId, action: 'business.updated' },
+      }),
+    ).toBe(2);
+  });
+
   it('records the technical detail in the audit log regardless', async () => {
     const context = await newBusiness();
     await completeOnboarding(context, {

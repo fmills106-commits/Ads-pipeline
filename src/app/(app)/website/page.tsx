@@ -11,6 +11,7 @@ import { listBusinesses } from '@/server/business/service';
 import { getScanStatus, getWebsiteKnowledge } from '@/server/scanner/service';
 import { formatCents } from '@/lib/budget';
 import { ScanControl } from './scan-control';
+import { WebsiteAddress } from './website-address';
 
 export const metadata: Metadata = { title: 'Website' };
 
@@ -69,10 +70,16 @@ export default async function WebsitePage() {
         }
       />
 
+      <WebsiteAddress
+        businessId={business.id}
+        websiteUrl={business.websiteUrl}
+        knowledge={{ products: knowledge.products.length, facts: knowledge.factCount }}
+      />
+
       {!hasWebsite ? (
         <EmptyState
           title="No website address"
-          description="Add your website in Settings and we can read it to learn what you sell."
+          description="Add your website above and we can read it to learn what you sell."
         />
       ) : null}
 
@@ -130,7 +137,7 @@ export default async function WebsitePage() {
                 {knowledge.products.length === 0 ? (
                   <p className="py-4 text-sm text-ink-muted">
                     No products found. If your products are on a different part of the site, check
-                    the address in Settings.
+                    the address above.
                   </p>
                 ) : (
                   <ul className="divide-y divide-border-subtle">

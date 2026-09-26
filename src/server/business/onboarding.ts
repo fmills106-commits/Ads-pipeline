@@ -106,6 +106,20 @@ export async function completeOnboarding(
 ): Promise<Business> {
   const env = getEnv();
 
+  /*
+   * Whether this call is the owner finishing setup, or repeating a step they
+   * had already finished.
+   *
+   * The activity entry below announces a milestone — "Set up to get more sales
+   * on $5/day" — and a milestone can only happen once. Recording it on every
+   * call means a double-clicked Finish button, or a re-submitted form, writes
+   * the same sentence into the feed twice, which is the feed telling the owner
+   * something happened twice when it happened once. The update and the audit
+   * entry stay unconditional: those describe a write, and the write is real
+   * either way.
+   */
+  const wasAlreadyOnboarded = isOnboarded(context.business);
+
   let budget;
   try {
     budget = resolveBudget(input.budgetAmountCents, input.budgetPeriod, {
@@ -157,6 +171,8 @@ export async function completeOnboarding(
   const automationLabel =
     AUTOMATION_CHOICES.find((choice) => choice.value === input.automationMode)?.label ??
     input.automationMode;
+
+  if (wasAlreadyOnboarded) return updated;
 
   await recordActivity(
     { ...context, business: updated },

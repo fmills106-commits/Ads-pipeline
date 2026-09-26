@@ -26,6 +26,8 @@ export const AUDIT_ACTIONS = {
   businessCreated: 'business.created',
   businessUpdated: 'business.updated',
   businessArchived: 'business.archived',
+  /// The address changed, and everything read from the old one was discarded.
+  websiteChanged: 'business.website_changed',
   automationLevelChanged: 'business.automation_level_changed',
   budgetLimitsChanged: 'business.budget_limits_changed',
 

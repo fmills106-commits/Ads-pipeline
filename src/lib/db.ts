@@ -35,3 +35,21 @@ export type PrismaTransaction = Omit<
 
 /** Accepts either the root client or a transaction handle. */
 export type Db = PrismaClient | PrismaTransaction;
+
+/**
+ * Runs `work` in a transaction, or joins the one already in progress.
+ *
+ * Every service here takes a `Db` so a caller can pass a transaction handle,
+ * which means a function that wants atomicity cannot simply call
+ * `$transaction` — Postgres has no nested transactions, and the handle does
+ * not offer the method. Without this, such a function has to choose between
+ * being atomic and being composable.
+ *
+ * Joining an outer transaction is the right semantics rather than a
+ * concession: the caller has already said where the boundary is, and a
+ * rollback out there should undo this work too.
+ */
+export async function inTransaction<T>(db: Db, work: (tx: Db) => Promise<T>): Promise<T> {
+  if ('$transaction' in db) return db.$transaction((tx) => work(tx));
+  return work(db);
+}

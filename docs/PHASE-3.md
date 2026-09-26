@@ -150,3 +150,36 @@ catalogue.
 
 **No images.** Phase 4. Today this is text a merchant could copy and use by
 hand, which is genuinely useful and is not an ad campaign.
+
+## Corrections from the first real owner
+
+Two things the first person to use the deployment found, and one the
+verification screenshots found.
+
+**No way to remove a website.** An owner typed an address to try the scanner
+and was then stuck with it. The missing button was not the whole problem:
+pointing a business at a different site invalidates everything downstream of
+the old one, so there was nothing safe to wire a button to until something knew
+what to discard. `src/server/business/website.ts` now does, and the rule it
+enforces is that the application must never describe one company using another
+company's pages — the website row and its cascade, the business-level facts,
+the AI's profile and inferences, and the offers and strategies drafted from
+them all go together, in one transaction with the address change. The audit
+log, the cost records and the activity feed survive: those are the record of
+what happened, and tidying away history is how you lose the ability to answer
+"why did it do that?"
+
+**No way to choose light or dark.** The palette had followed
+`prefers-color-scheme` since Phase 1, so dark mode worked for anyone whose
+device was set to dark and was invisible to everyone else. The choice now lives
+in a cookie read by the root layout, which means the right theme is in the HTML
+the server sends — no flash of the wrong colours, and no blocking inline script,
+which matters because the content-security-policy admits no un-nonced inline
+script. `system` remains the default and means "keep following the device",
+which is why it is three options rather than a toggle.
+
+**Setup announced itself twice.** A screenshot of the dashboard showed "Set up
+to get more sales on $5/day" twice in the activity feed. `completeOnboarding`
+recorded the milestone on every call, so a double-clicked Finish button wrote
+it twice. It is now recorded only on the transition into being onboarded; the
+audit log still records both writes, because both really happened.

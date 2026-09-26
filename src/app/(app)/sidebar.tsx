@@ -11,11 +11,14 @@ export function Sidebar({
   userName,
   userEmail,
   logout,
+  appearance,
 }: {
   workspaceName: string;
   userName: string;
   userEmail: string;
   logout: ReactNode;
+  /** The theme switch. Passed in because it is a server component. */
+  appearance: ReactNode;
 }) {
   const pathname = usePathname();
 
@@ -77,7 +80,13 @@ export function Sidebar({
         })}
       </nav>
 
+      {/* On a phone this sits under the nav rather than being hidden: the
+          appearance choice is as useful there as anywhere, and unlike
+          sign-out it has no compact home in the header. */}
+      <div className="border-t border-border-subtle px-4 py-3 md:hidden">{appearance}</div>
+
       <div className="hidden border-t border-border-subtle p-4 md:block">
+        <div className="mb-4">{appearance}</div>
         <p className="truncate text-sm font-medium" title={userName}>
           {userName}
         </p>

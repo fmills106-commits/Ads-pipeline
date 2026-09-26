@@ -27,9 +27,18 @@
   --color-status-danger: #b91c1c;
 }
 
-/* Dark palette: the same variables, redefined at runtime. */
+/**
+ * Dark palette: the same variables, redefined at runtime.
+ *
+ * Applied in two places, and the order matters. The media query follows the
+ * device, but is disabled once `data-theme="light"` is present so that someone
+ * on a dark device can choose light. The attribute rule comes second, so an
+ * explicit dark choice wins on a light device. `data-theme` is set server-side
+ * from a cookie — see src/lib/theme.ts — which is why there is no inline
+ * script here and no flash of the wrong colours.
+ */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --color-canvas: #0b1120;
     --color-surface: #111827;
     --color-surface-muted: #0f172a;
@@ -45,6 +54,34 @@
     --color-status-ok: #4ade80;
     --color-status-danger: #f87171;
   }
+}
+
+:root[data-theme='dark'] {
+  --color-canvas: #0b1120;
+  --color-surface: #111827;
+  --color-surface-muted: #0f172a;
+  --color-border-subtle: #1f2937;
+  --color-ink: #e2e8f0;
+  --color-ink-muted: #94a3b8;
+  --color-accent: #818cf8;
+  --color-accent-soft: #1e1b4b;
+
+  --color-status-draft: #94a3b8;
+  --color-status-pending: #fbbf24;
+  --color-status-ok: #4ade80;
+  --color-status-danger: #f87171;
+}
+
+/*
+ * So form controls, scrollbars and the like follow the chosen theme too, not
+ * just our own surfaces.
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
 }
 
 html,

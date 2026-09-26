@@ -1,9 +1,12 @@
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { getCurrentUser } from '@/server/auth/current-user';
 import { listWorkspacesForUser } from '@/server/tenancy/context';
+import { parseTheme, THEME_COOKIE } from '@/lib/theme';
 import { Sidebar } from './sidebar';
 import { LogoutButton } from './logout-button';
+import { ThemeSwitch } from './theme-switch';
 
 /**
  * The authenticated shell.
@@ -26,6 +29,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         userName={user.name}
         userEmail={user.email}
         logout={<LogoutButton />}
+        appearance={<ThemeSwitch theme={parseTheme((await cookies()).get(THEME_COOKIE)?.value)} />}
       />
       <main className="min-w-0 flex-1 overflow-x-hidden px-4 py-8 sm:px-6 md:px-10">
         <div className="mx-auto w-full max-w-6xl">{children}</div>

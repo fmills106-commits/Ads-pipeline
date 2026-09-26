@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import type { ProviderCapability } from '@prisma/client';
 import { Card, PageHeader, cx } from '@/components/ui/primitives';
 import { requireCurrentUser } from '@/server/auth/current-user';
@@ -70,7 +71,18 @@ export default async function SettingsPage() {
               <dt className="text-ink-muted">Business</dt>
               <dd>{business.name}</dd>
               <dt className="text-ink-muted">Website</dt>
-              <dd>{business.websiteUrl ?? 'Not set'}</dd>
+              {/* The address is changed on the Website page, next to what was
+                  read from it — so this says where, rather than being a dead
+                  end for someone who came here looking to edit it. */}
+              <dd className="flex flex-wrap items-baseline gap-x-2">
+                <span>{business.websiteUrl ?? 'Not set'}</span>
+                <Link
+                  href="/website"
+                  className="text-xs text-accent underline-offset-2 hover:underline"
+                >
+                  {business.websiteUrl ? 'Change' : 'Add one'}
+                </Link>
+              </dd>
               <dt className="text-ink-muted">Goal</dt>
               <dd>{GOAL_CHOICES.find((c) => c.value === business.goal)?.label ?? 'Not set'}</dd>
               <dt className="text-ink-muted">Budget</dt>
