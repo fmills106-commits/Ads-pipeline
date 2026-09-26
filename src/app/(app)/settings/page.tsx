@@ -12,6 +12,7 @@ import { AUTOMATION_CHOICES, GOAL_CHOICES } from '@/server/business/onboarding';
 import { formatBudget, formatCents } from '@/lib/budget';
 import { isZeroCostMode } from '@/lib/env';
 import { AdvancedSettings } from './advanced-settings';
+import { BusinessName } from './business-name';
 
 export const metadata: Metadata = { title: 'Settings' };
 
@@ -69,7 +70,9 @@ export default async function SettingsPage() {
             <h2 className="mb-3 text-sm font-semibold">Your advertising</h2>
             <dl className="grid gap-3 text-sm sm:grid-cols-[10rem_1fr]">
               <dt className="text-ink-muted">Business</dt>
-              <dd>{business.name}</dd>
+              <dd>
+                <BusinessName businessId={business.id} name={business.name} />
+              </dd>
               <dt className="text-ink-muted">Website</dt>
               {/* The address is changed on the Website page, next to what was
                   read from it — so this says where, rather than being a dead

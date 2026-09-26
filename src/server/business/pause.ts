@@ -2,7 +2,7 @@ import type { Business } from '@prisma/client';
 import { prisma, type Db } from '@/lib/db';
 import { logger } from '@/lib/logger';
 import { AUDIT_ACTIONS, recordAudit } from '@/server/audit/log';
-import { recordActivity } from '@/server/activity/feed';
+import { recordActivity, resolveAttention } from '@/server/activity/feed';
 import type { BusinessContext } from '@/server/tenancy/context';
 
 /**
@@ -111,6 +111,13 @@ export async function resumeEverything(
     { kind: 'everythingResumed', message: 'Advertising resumed.' },
     db,
   );
+
+  /*
+   * Resuming is the answer to "you paused everything". Without this the
+   * dashboard kept counting a pause the owner had already lifted among the
+   * things needing their input.
+   */
+  await resolveAttention(context, ['everythingPaused'], db);
 
   return resumed;
 }

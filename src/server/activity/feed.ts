@@ -72,6 +72,17 @@ export interface RecordActivityInput {
  * Never throws, for the same reason the audit writer does not: a feed entry
  * failing must not roll back the work it describes.
  */
+/**
+ * How close together two identical entries have to be to count as one.
+ *
+ * A double-clicked button, or a form submitted twice while the first request
+ * was still in flight, produces the same sentence twice with the same
+ * timestamp. Both writes are real, and the audit log keeps both — but the feed
+ * is the short version somebody reads over coffee, and the same sentence twice
+ * tells them something happened twice when it happened once.
+ */
+const DUPLICATE_WINDOW_MS = 60_000;
+
 export async function recordActivity(
   context: BusinessContext,
   input: RecordActivityInput,
@@ -79,6 +90,22 @@ export async function recordActivity(
 ): Promise<void> {
   const defaults = ACTIVITY_KINDS[input.kind];
   const severity = input.severity ?? defaults.severity;
+
+  try {
+    const duplicate = await db.activityEvent.findFirst({
+      where: {
+        businessId: context.businessId,
+        kind: input.kind,
+        message: input.message,
+        createdAt: { gte: new Date(Date.now() - DUPLICATE_WINDOW_MS) },
+      },
+      select: { id: true },
+    });
+    if (duplicate) return;
+  } catch {
+    // Not worth failing the write for: a duplicate entry is untidy, a lost
+    // entry is a gap in the record.
+  }
 
   try {
     await db.activityEvent.create({
@@ -142,4 +169,43 @@ export async function pendingAttentionCount(
   return db.activityEvent.count({
     where: { businessId: context.businessId, needsAttention: true, resolvedAt: null },
   });
+}
+
+/**
+ * Marks earlier "needs your input" entries answered.
+ *
+ * `resolvedAt` has been on the model and filtered by `pendingAttentionCount`
+ * since the feed was built, and nothing ever set it — so an owner whose
+ * website was blocked, who then fixed their firewall and scanned
+ * successfully, still had "2 things need your input" on the dashboard,
+ * pointing at problems that no longer existed and offering no way to say so.
+ * A question that cannot be answered stops being read.
+ *
+ * Called where the condition clears, by the code that knows it cleared: a scan
+ * that succeeds answers the scan failures before it, and resuming answers the
+ * pause. The entries stay in the feed — they happened — they just stop asking.
+ */
+export async function resolveAttention(
+  context: BusinessContext,
+  kinds: ActivityKind[],
+  db: Db = prisma,
+): Promise<number> {
+  try {
+    const { count } = await db.activityEvent.updateMany({
+      where: {
+        businessId: context.businessId,
+        kind: { in: kinds },
+        needsAttention: true,
+        resolvedAt: null,
+      },
+      data: { resolvedAt: new Date() },
+    });
+    return count;
+  } catch (error) {
+    logger().error('Failed to resolve activity attention', {
+      error,
+      businessId: context.businessId,
+    });
+    return 0;
+  }
 }

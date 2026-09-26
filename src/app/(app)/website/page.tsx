@@ -10,8 +10,10 @@ import {
 import { listBusinesses } from '@/server/business/service';
 import { getScanStatus, getWebsiteKnowledge } from '@/server/scanner/service';
 import { formatCents } from '@/lib/budget';
+import { getEnv } from '@/lib/env';
 import { ScanControl } from './scan-control';
 import { WebsiteAddress } from './website-address';
+import { BlockedHelp } from './blocked-help';
 import { PauseControl } from '../dashboard/pause-control';
 
 export const metadata: Metadata = { title: 'Website' };
@@ -61,6 +63,11 @@ export default async function WebsitePage() {
 
   const hasWebsite = Boolean(business.websiteUrl);
 
+  const scanError = (status.scanRun?.error ?? null) as {
+    message?: string;
+    blockedStatus?: number;
+  } | null;
+
   return (
     <>
       <PageHeader
@@ -104,16 +111,24 @@ export default async function WebsitePage() {
         />
       ) : null}
 
-      {status.phase === 'failed' && status.scanRun?.error ? (
+      {status.phase === 'failed' && scanError ? (
         <div className="mb-5 flex items-start gap-3 rounded-lg border border-status-danger/30 bg-status-danger/5 p-4">
           <span aria-hidden="true">⚠️</span>
           <p className="text-sm">
             <strong>We couldn&rsquo;t read your website.</strong>{' '}
-            <span className="text-ink-muted">
-              {(status.scanRun.error as { message?: string }).message ?? 'Please try again.'}
-            </span>
+            <span className="text-ink-muted">{scanError.message ?? 'Please try again.'}</span>
           </p>
         </div>
+      ) : null}
+
+      {/*
+        A firewall refusing us is the one scan failure the owner can usually
+        clear themselves, so it gets instructions rather than a sentence. Shown
+        only for that case, chosen from a status the failure carried rather
+        than by matching the message text.
+      */}
+      {status.phase === 'failed' && typeof scanError?.blockedStatus === 'number' ? (
+        <BlockedHelp status={scanError.blockedStatus} userAgent={getEnv().CRAWLER_USER_AGENT} />
       ) : null}
 
       {status.scanRun?.status === 'PARTIAL' ? (

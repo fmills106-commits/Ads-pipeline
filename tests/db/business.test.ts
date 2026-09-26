@@ -174,3 +174,44 @@ describe('cascade behaviour', () => {
     expect(entry?.action).toBe('business.created');
   });
 });
+
+describe('renaming a business', () => {
+  /*
+   * `updateBusiness` already did this; what was missing was any way to reach
+   * it. Worth covering the two properties a rename must have, because the
+   * name is not decoration: the free local analyser builds its placeholder
+   * sentence from it, so a business set up as "Apple" while testing kept
+   * saying "Apple sells products described on its own website" long after its
+   * website pointed elsewhere.
+   */
+  it('refuses a name that is only whitespace', async () => {
+    const created = await createBusiness(await context(), { name: 'Named Co' });
+    const businessContext = await requireBusinessContext(user, created.id);
+
+    await expect(updateBusiness(businessContext, { name: '   ' })).rejects.toThrow(
+      /cannot be empty/i,
+    );
+  });
+
+  it('keeps everything the site taught it', async () => {
+    // Renaming is not repointing. Unlike changing the website, nothing read
+    // from the site becomes wrong because the business is called something
+    // else — so none of it may be discarded.
+    const created = await createBusiness(await context(), { name: 'Before' });
+    const businessContext = await requireBusinessContext(user, created.id);
+    await prisma.businessFact.create({
+      data: {
+        businessId: created.id,
+        key: 'business.name',
+        value: 'Before',
+        sourceUrl: 'https://example.com/',
+        method: 'HTML',
+        confidence: 0.8,
+      },
+    });
+
+    await updateBusiness(businessContext, { name: 'After' });
+
+    expect(await prisma.businessFact.count({ where: { businessId: created.id } })).toBe(1);
+  });
+});

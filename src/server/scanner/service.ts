@@ -296,13 +296,28 @@ export async function markScanFailed(
   db: Db = prisma,
 ): Promise<void> {
   const appError = toAppError(error);
+
+  /*
+   * `blocked` travels with the failure so the UI can offer the fix without
+   * matching on the message text. A firewall refusing the crawler is the one
+   * scan failure the owner can usually clear themselves, and it is worth a set
+   * of instructions rather than a sentence — but only for that case, so the
+   * screen needs to know which case it is, reliably, in a way that a reworded
+   * message cannot break.
+   */
+  const blockedStatus = appError.details?.['blockedStatus'];
+
   await db.scanRun
     .update({
       where: { id: scanRunId },
       data: {
         status: 'FAILED',
         finishedAt: new Date(),
-        error: { code: appError.code, message: appError.publicMessage },
+        error: {
+          code: appError.code,
+          message: appError.publicMessage,
+          ...(typeof blockedStatus === 'number' ? { blockedStatus } : {}),
+        },
       },
     })
     .catch(() => undefined);

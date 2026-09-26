@@ -9,7 +9,12 @@ import { createLocalWebFetchProvider } from '@/server/providers/local/web-fetch'
 import { pauseEverything } from '@/server/business/pause';
 import { createBusiness } from '@/server/business/service';
 import { requireBusinessContext, requireWorkspaceContext } from '@/server/tenancy/context';
-import { recentActivity } from '@/server/activity/feed';
+import {
+  pendingAttentionCount,
+  recentActivity,
+  recordActivity,
+  resolveAttention,
+} from '@/server/activity/feed';
 import type { UrlPolicy } from '@/lib/net-safety';
 import { FIXTURE_PRODUCT_COUNT, startFixtureSite, type FixtureSite } from '../helpers/fixture-site';
 import { createTestUser, createTestWorkspace, resetDatabase } from '../helpers/db';
@@ -538,5 +543,59 @@ describe('a shop whose products all live on one page', () => {
     });
     expect(starter.productUrl).toBe(`${site.origin}/products/sourdough-starter`);
     expect(starter.productUrl).not.toContain('#');
+  });
+});
+
+describe('the activity feed after things go wrong and then right', () => {
+  /*
+   * Both of these were visible on a real dashboard at once: "3 things need
+   * your input" pointing at two website failures that had since been fixed,
+   * and the same analysis sentence twice with the same timestamp.
+   */
+  it('stops asking about a failure once the site reads successfully', async () => {
+    const context = await newBusiness('Was Blocked');
+
+    // Two failed attempts, as a blocked site produces.
+    for (let i = 0; i < 2; i += 1) {
+      await recordActivity(context, {
+        kind: 'needsYourInput',
+        message: `Could not read example.com. Attempt ${i + 1}.`,
+        needsAttention: true,
+      });
+    }
+    expect(await pendingAttentionCount(context)).toBe(2);
+
+    await resolveAttention(context, ['needsYourInput']);
+
+    // Still in the feed — they happened — but no longer asking.
+    expect(await pendingAttentionCount(context)).toBe(0);
+    expect((await recentActivity(context)).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('writes one entry when the same thing is recorded twice in a moment', async () => {
+    const context = await newBusiness('Double Clicker');
+    const entry = {
+      kind: 'analysisReady',
+      message: 'Put together a first reading of your business.',
+    } as const;
+
+    await recordActivity(context, entry);
+    await recordActivity(context, entry);
+
+    const matching = (await recentActivity(context)).filter(
+      (item) => item.message === entry.message,
+    );
+    expect(matching).toHaveLength(1);
+  });
+
+  it('does not collapse two genuinely different entries', async () => {
+    const context = await newBusiness('Two Things');
+
+    await recordActivity(context, { kind: 'analysisReady', message: 'First thing.' });
+    await recordActivity(context, { kind: 'analysisReady', message: 'Second thing.' });
+
+    const messages = (await recentActivity(context)).map((item) => item.message);
+    expect(messages).toContain('First thing.');
+    expect(messages).toContain('Second thing.');
   });
 });

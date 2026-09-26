@@ -4,7 +4,7 @@ import { getEnv } from '@/lib/env';
 import { AppError, toAppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { AUDIT_ACTIONS, recordAudit } from '@/server/audit/log';
-import { recordActivity } from '@/server/activity/feed';
+import { recordActivity, resolveAttention } from '@/server/activity/feed';
 import { isPaused } from '@/server/business/pause';
 import { registerJobHandler } from '@/server/jobs/worker';
 import { JOB_TYPES, websiteScanPayload } from '@/server/jobs/types';
@@ -177,7 +177,12 @@ export async function runWebsiteScanJob(rawPayload: unknown): Promise<Prisma.Inp
         // have changed something.
         retryable: false,
         publicMessage: reason,
-        details: { warnings: crawl.warnings.slice(0, 5) },
+        details: {
+          warnings: crawl.warnings.slice(0, 5),
+          ...(blockedStatusOf(crawl) === undefined
+            ? {}
+            : { blockedStatus: blockedStatusOf(crawl) }),
+        },
       });
     }
 
@@ -325,6 +330,24 @@ function describeUnreachable(crawl: CrawlResult): string {
  * The user agent is named because that is the string they need to allow, and
  * guessing it is not something an owner should have to do.
  */
+/** The statuses that mean "something in front of the site refused us". */
+const BLOCKED_STATUSES = new Set([401, 403, 429]);
+
+/**
+ * The status a firewall refused the root URL with, if that is what happened.
+ *
+ * Returned as a number rather than a flag so the screen can say which it was,
+ * and so a future status joining the set does not need a second field.
+ */
+export function blockedStatusOf(crawl: CrawlResult): number | undefined {
+  for (const warning of crawl.warnings) {
+    if (!warning.reason.startsWith('http-')) continue;
+    const status = Number(warning.reason.slice(5));
+    if (BLOCKED_STATUSES.has(status)) return status;
+  }
+  return undefined;
+}
+
 export function describeHttpStatus(code: string): string {
   const agent = getEnv().CRAWLER_USER_AGENT;
 
@@ -373,6 +396,14 @@ async function writeActivity(
   productsFound: number,
 ): Promise<void> {
   const host = hostOf(crawl.resolvedRootUrl);
+
+  /*
+   * Reading the site is the answer to every earlier "we couldn't read your
+   * site". Leaving those asking meant an owner who fixed their firewall and
+   * scanned successfully still saw "2 things need your input" pointing at
+   * problems that no longer existed.
+   */
+  await resolveAttention(context, ['needsYourInput']);
 
   if (changes.isFirstScan) {
     const productPart =
