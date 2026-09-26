@@ -112,7 +112,14 @@ export function selectProvider(context: SelectionContext): Selection {
   const zeroCost = context.zeroCostMode ?? isZeroCostMode();
   const enabledPaid = context.enabledPaid ?? NO_PAID_PROVIDERS;
 
-  const candidates = listProviders(context.capability).filter((d) => d.isConfigured());
+  /*
+   * `implemented === false` is a descriptor whose adapter is not written yet;
+   * its factory throws. Excluded here rather than at instantiation, so it can
+   * never be chosen however it is configured or enabled.
+   */
+  const candidates = listProviders(context.capability).filter(
+    (d) => d.implemented !== false && d.isConfigured(),
+  );
   const free = candidates.filter((d) => d.tier === 'LOCAL_FREE');
   const paid = candidates.filter((d) => d.tier === 'EXTERNAL_PAID');
 

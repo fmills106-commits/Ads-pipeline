@@ -62,6 +62,7 @@ export function registerAllProviders(): void {
         'Higher-quality strategy and ad copy, billed per token by Anthropic. Off unless you enable it.',
       priority: 10,
       isConfigured: () => externalCredentials().anthropic,
+      implemented: false,
     },
     notYetImplemented('ai.anthropic', 3),
   );
@@ -76,6 +77,7 @@ export function registerAllProviders(): void {
         'Photographic and lifestyle creatives from a hosted image model, billed per image. Off unless you enable it.',
       priority: 10,
       isConfigured: () => externalCredentials().imageGeneration,
+      implemented: false,
     },
     notYetImplemented('image.external', 4),
   );
@@ -90,6 +92,7 @@ export function registerAllProviders(): void {
         'For deployments running more than one instance. Free alternatives exist — self-hosted MinIO works here too.',
       priority: 10,
       isConfigured: () => externalCredentials().s3,
+      implemented: false,
     },
     notYetImplemented('storage.s3', 4),
   );
@@ -107,6 +110,7 @@ export function registerAllProviders(): void {
       // selected — it is listed so Settings can be honest that the option
       // exists and is off.
       isConfigured: () => false,
+      implemented: false,
     },
     notYetImplemented('webfetch.external', 2),
   );
@@ -121,6 +125,7 @@ export function registerAllProviders(): void {
         'Publishes real campaigns that serve real ads and spend your advertising budget. Off unless you enable it.',
       priority: 10,
       isConfigured: () => externalCredentials().meta,
+      implemented: false,
     },
     notYetImplemented('advertising.meta', 6),
   );

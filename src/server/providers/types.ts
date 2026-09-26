@@ -41,6 +41,18 @@ export interface ProviderDescriptor {
    * bucket. `false` means it cannot be selected however it is configured.
    */
   isConfigured: () => boolean;
+  /**
+   * Whether an implementation actually exists behind this key.
+   *
+   * A descriptor is registered before its adapter is written, so the interface
+   * can honestly list what is coming. `false` means the factory throws, and
+   * such a provider must never be selected — the alternative, discovered the
+   * moment a paid switch existed, is an owner turning one on and every AI
+   * action failing from then on.
+   *
+   * Absent means implemented. Only the placeholders say otherwise.
+   */
+  implemented?: boolean;
 }
 
 /**

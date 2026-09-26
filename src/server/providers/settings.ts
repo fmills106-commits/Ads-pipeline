@@ -27,7 +27,12 @@ import type { ProviderSetting } from '@prisma/client';
 
 /** Why a provider cannot be switched on, in the order worth fixing. */
 export type BlockedReason =
-  'zero-cost-mode' | 'no-credentials' | 'no-allowance' | 'unknown-provider' | 'not-paid';
+  | 'not-implemented'
+  | 'zero-cost-mode'
+  | 'no-credentials'
+  | 'no-allowance'
+  | 'unknown-provider'
+  | 'not-paid';
 
 export interface ProviderBlock {
   reason: BlockedReason;
@@ -51,6 +56,20 @@ export function whyBlocked(providerKey: string): ProviderBlock | null {
     return {
       reason: 'not-paid',
       message: 'That service is free and always on; there is nothing to switch.',
+    };
+  }
+
+  /*
+   * Named before anything else, because no amount of configuring fixes it and
+   * a switch that flips into a permanently failing state is worse than one
+   * that will not flip. The descriptor exists so the interface can honestly
+   * list what is coming; the adapter does not exist yet.
+   */
+  if (descriptor.implemented === false) {
+    return {
+      reason: 'not-implemented',
+      message:
+        'This one is not built yet, so it cannot be switched on. It is listed here because it is coming, not because it is available.',
     };
   }
 
