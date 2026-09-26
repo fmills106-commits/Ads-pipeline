@@ -23,6 +23,17 @@ import type { ChangeSummary } from './persist';
 export interface StartScanInput {
   /** Defaults to the business's configured website. */
   url?: string;
+  /**
+   * Who asked for this scan.
+   *
+   * `SYSTEM` — the default, and what a scheduler, a retry or any future
+   * automatic rescan is. `OWNER` means a person just pressed the button, which
+   * is the only thing that may read a site while advertising is paused.
+   *
+   * Defaulted to the restrictive value on purpose: a new caller that forgets
+   * to say gets the safe behaviour rather than the permissive one.
+   */
+  trigger?: 'OWNER' | 'SYSTEM';
 }
 
 export interface StartScanResult {
@@ -35,18 +46,33 @@ export interface StartScanResult {
 /**
  * Queues a scan.
  *
- * Refuses when the business is paused: a paused business does no work at all,
- * and that gate lives here rather than in the UI so a background trigger
- * cannot bypass it.
+ * A pause stops the system acting on its own, so a scan it decided to run is
+ * refused while paused. A scan the **owner** just asked for is not: reading
+ * your own website spends nothing, launches nothing and advertises nothing,
+ * and it is the owner doing it deliberately rather than automation running.
+ *
+ * Blocking it was worse than useless. The refusal read "Resume it to scan the
+ * website", which told an owner who had paused advertising — perhaps because
+ * something was going wrong — that the way to look at their own site was to
+ * turn advertising back on. Resuming is the one action here that can start
+ * spending money. Coupling the harmless thing to the dangerous one is how a
+ * safety control teaches people to switch it off.
+ *
+ * The gate stays here rather than in the UI, so a background trigger still
+ * cannot bypass it: the default is SYSTEM, and only a caller that can point at
+ * a person says otherwise.
  */
 export async function startScan(
   context: BusinessContext,
   input: StartScanInput = {},
   db: Db = prisma,
 ): Promise<StartScanResult> {
-  if (isPaused(context.business)) {
+  const requestedByOwner = input.trigger === 'OWNER';
+
+  if (isPaused(context.business) && !requestedByOwner) {
     throw conflict('Business is paused', {
-      publicMessage: 'Advertising is paused for this business. Resume it to scan the website.',
+      publicMessage:
+        'Advertising is paused for this business, so nothing is scanned automatically.',
     });
   }
 
@@ -89,6 +115,11 @@ export async function startScan(
         businessId: context.businessId,
         requestedUrl,
         isRescan: false,
+        // Carried into the worker, which re-checks the pause: without it, a
+        // scan the owner asked for while paused is queued here and then
+        // cancelled minutes later by the job, which looks like nothing
+        // happening at all.
+        ownerRequested: requestedByOwner,
       },
       // One scan per business per run; the ScanRun id keeps it unique.
       idempotencyKey: `website.scan:${scanRun.id}`,

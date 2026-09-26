@@ -5,6 +5,7 @@ import type { WebFetchProvider } from '@/server/providers/types';
 import { AppError } from '@/lib/errors';
 import type { UrlPolicy } from '@/lib/net-safety';
 import { startFixtureSite, type FixtureSite } from '../helpers/fixture-site';
+import { pausedSince } from '@/server/scanner/job';
 
 /**
  * The crawler, against a real HTTP server on a real socket.
@@ -401,5 +402,34 @@ describe('crawl limits', () => {
     // Politeness is not optional when fetching someone else's server.
     expect(waits.length).toBeGreaterThan(0);
     expect(Math.max(...waits)).toBeLessThanOrEqual(500);
+  });
+});
+
+describe('a pause during a crawl, versus one already in force', () => {
+  /*
+   * The rule the crawler stops on, tested directly because it cannot be
+   * reached through the job: `crawlWebsite` validates its start URL against
+   * the strict policy, which has no test escape hatch on purpose, so the job
+   * can only be exercised against hosts that never resolve.
+   *
+   * Both halves matter. Reading a site while advertising is already paused is
+   * allowed — it spends nothing — and a crawl that stopped on any pause at all
+   * cancelled itself before its first page, which looked exactly like the
+   * button not working. Pressing pause during a crawl must still stop it.
+   */
+  const startedAt = new Date('2026-09-26T12:00:00.000Z').getTime();
+
+  it('does not stop for a pause that was already in force', () => {
+    const before = new Date(startedAt - 60_000);
+    expect(pausedSince(before, startedAt)).toBe(false);
+  });
+
+  it('stops for a pause pressed after the crawl began', () => {
+    const during = new Date(startedAt + 5_000);
+    expect(pausedSince(during, startedAt)).toBe(true);
+  });
+
+  it('does not stop when nothing is paused', () => {
+    expect(pausedSince(null, startedAt)).toBe(false);
   });
 });

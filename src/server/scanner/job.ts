@@ -28,6 +28,24 @@ import { persistScan, type ChangeSummary } from './persist';
  * scan, carrying the total bytes, is the useful granularity.
  */
 
+/**
+ * Whether a pause arrived after a crawl began, and so should stop it.
+ *
+ * Exported because it is the whole rule, and it cannot be reached through the
+ * job in a test: `crawlWebsite` validates its start URL against the strict URL
+ * policy, which by design has no configuration path and no test escape hatch,
+ * so the job can only be run in tests against hosts that never resolve.
+ *
+ * The distinction it draws is the one that matters. "Is the business paused?"
+ * looks equivalent and silently broke reading a site while advertising was
+ * already off: the crawl started, asked, and stopped before its first page,
+ * recording CANCELLED with nothing in it. Pressing pause *during* a crawl
+ * still stops it within a page, which is what the check is for.
+ */
+export function pausedSince(pausedAt: Date | null, startedAtMs: number): boolean {
+  return pausedAt !== null && pausedAt.getTime() > startedAtMs;
+}
+
 export async function runWebsiteScanJob(rawPayload: unknown): Promise<Prisma.InputJsonValue> {
   const payload = websiteScanPayload.parse(rawPayload);
   const log = logger().child({ scanRunId: payload.scanRunId, businessId: payload.businessId });
@@ -46,8 +64,14 @@ export async function runWebsiteScanJob(rawPayload: unknown): Promise<Prisma.Inp
     });
   }
 
-  // A pause that landed after the job was queued must still stop it.
-  if (isPaused(business)) {
+  /*
+   * A pause that landed after the job was queued must still stop it — but only
+   * for a scan the system decided to run. A scan the owner asked for is left
+   * to finish: it spends nothing and advertises nothing, and cancelling it
+   * here would mean the button appeared to work and then quietly did nothing,
+   * minutes later, with the owner long gone.
+   */
+  if (isPaused(business) && !payload.ownerRequested) {
     await prisma.scanRun.update({
       where: { id: scanRun.id },
       data: { status: 'CANCELLED', finishedAt: new Date(), stopReason: 'business-paused' },
@@ -67,6 +91,10 @@ export async function runWebsiteScanJob(rawPayload: unknown): Promise<Prisma.Inp
 
   try {
     const enabledPaid = await loadEnabledPaidProviders(context.workspace.id);
+
+    // Captured before the first fetch, so "paused since this scan started" is
+    // a question with an answer.
+    const crawlStartedAt = Date.now();
 
     const outcome = await runProvider<WebFetchProvider, CrawlResult>({
       capability: 'WEB_FETCH',
@@ -90,14 +118,24 @@ export async function runWebsiteScanJob(rawPayload: unknown): Promise<Prisma.Inp
            * continues from a warm content-hash cache.
            */
           limits: { maxDurationMs: crawlBudgetMs() },
-          // Re-read on every page so pressing "Pause everything" mid-crawl
-          // stops it within one page rather than at the end.
+          /*
+           * Re-read on every page so pressing "Pause everything" mid-crawl
+           * stops it within one page rather than at the end.
+           *
+           * What counts is a pause that began *after* this scan did. Stopping
+           * on any pause at all looks equivalent and is not: an owner who
+           * asked to read their site while advertising was already paused got
+           * a scan that started, checked, and cancelled itself before reading
+           * a single page — reported as CANCELLED with nothing in it, which
+           * reads as the button not working. Pressing pause during the crawl
+           * still stops it, which is the case this check exists for.
+           */
           shouldStop: async () => {
             const current = await prisma.business.findUnique({
               where: { id: payload.businessId },
               select: { pausedAt: true },
             });
-            return current?.pausedAt != null;
+            return pausedSince(current?.pausedAt ?? null, crawlStartedAt);
           },
         });
 

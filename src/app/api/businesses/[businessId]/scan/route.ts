@@ -26,7 +26,15 @@ export const POST = route(
     if (typeof businessId !== 'string') throw validationError('businessId is required');
 
     const context = await requireBusinessContext(user, businessId, { minimumRole: 'MEMBER' });
-    const result = await startScan(context, body.url === undefined ? {} : { url: body.url });
+    /*
+     * This endpoint only ever runs inside a request from a signed-in member,
+     * so it is the one caller that can honestly claim a person asked. That is
+     * what allows a site to be read while advertising is paused.
+     */
+    const result = await startScan(context, {
+      trigger: 'OWNER',
+      ...(body.url === undefined ? {} : { url: body.url }),
+    });
 
     // Best-effort: starts the work now in single-process deployments. Production
     // runs a dedicated worker, which would pick this up regardless.

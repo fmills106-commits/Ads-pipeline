@@ -12,6 +12,7 @@ import { getScanStatus, getWebsiteKnowledge } from '@/server/scanner/service';
 import { formatCents } from '@/lib/budget';
 import { ScanControl } from './scan-control';
 import { WebsiteAddress } from './website-address';
+import { PauseControl } from '../dashboard/pause-control';
 
 export const metadata: Metadata = { title: 'Website' };
 
@@ -69,6 +70,26 @@ export default async function WebsitePage() {
           hasWebsite ? <ScanControl businessId={business.id} initialPhase={status.phase} /> : null
         }
       />
+
+      {/*
+        Said here, where it is relevant, and with the control that undoes it.
+        Reading the site works while paused — it spends nothing — but an owner
+        looking at this page deserves to know their advertising is off, and not
+        to have to go and find the switch elsewhere. A message that tells you
+        to change something, on a page with no way to change it, is how the
+        earlier version of this sent someone hunting.
+      */}
+      {business.pausedAt !== null ? (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-status-pending/40 bg-status-pending/5 p-4">
+          <p className="text-sm">
+            <strong>Advertising is paused.</strong>{' '}
+            <span className="text-ink-muted">
+              Reading your website still works — it costs nothing and runs no ads.
+            </span>
+          </p>
+          <PauseControl businessId={business.id} paused />
+        </div>
+      ) : null}
 
       <WebsiteAddress
         businessId={business.id}

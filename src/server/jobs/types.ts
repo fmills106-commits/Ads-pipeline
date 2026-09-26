@@ -14,6 +14,16 @@ export const websiteScanPayload = z.object({
   requestedUrl: z.string().url(),
   /** A rescan compares against the previous completed scan. */
   isRescan: z.boolean().default(false),
+  /**
+   * Whether a person pressed the button, as opposed to the system deciding.
+   *
+   * The worker re-checks the pause — a pause that lands after a job is queued
+   * must still stop it — and needs to know which kind of scan this is to apply
+   * the same rule `startScan` did. Defaulted false so a payload written before
+   * this field existed, or by a caller that does not set it, is treated as
+   * automatic.
+   */
+  ownerRequested: z.boolean().default(false),
 });
 
 export const JOB_TYPES = {

@@ -444,3 +444,39 @@ The fix is to the pattern, not to the text. Putting spaces between elements
 would fix the boundary and break something worse: a price split across
 elements, `<span>$</span><span>15</span>`, is ordinary storefront markup and
 would become "$ 15" and stop parsing as money.
+
+## Pausing advertising does not stop you reading your own site
+
+Reported by the owner: the Website page said "Advertising is paused for this
+business. Resume it to scan the website", on a page with no way to resume.
+
+Two separate faults. The message was a dead end — it told you to change
+something from a page that could not change it. And the rule behind it was
+wrong: reading your own website spends nothing, launches nothing and
+advertises nothing, so refusing it while paused told an owner who had paused
+advertising, perhaps because something was going wrong, that the way to look at
+their own site was to turn advertising back on. Resuming is the one action here
+that can start spending money. Coupling the harmless thing to the dangerous one
+is how a safety control teaches people to switch it off.
+
+So `StartScanInput.trigger` distinguishes `OWNER` from `SYSTEM`, defaulting to
+`SYSTEM` — a caller that forgets gets the restrictive behaviour. Only the API
+route, which runs inside a request from a signed-in member, claims `OWNER`. A
+scan the system decided to run is still refused while paused, so no background
+trigger has gained anything.
+
+The pause is checked in **three** places, and the first fix only changed two of
+them. `startScan` allowed the scan and the job let it through, but the crawler
+re-reads the pause before every page and stopped on the first check — so the
+scan ran, read nothing, and recorded CANCELLED. From the owner's side that is
+indistinguishable from the button doing nothing. The third check now asks
+whether the pause arrived _after_ this crawl began: a pause already in force
+does not stop a scan the owner just asked for, and pressing "Pause everything"
+mid-crawl still stops it within one page.
+
+That predicate is exported as `pausedSince` and unit-tested, because it cannot
+be reached through the job: `crawlWebsite` validates its start URL against the
+strict URL policy, which has no configuration path and no test escape hatch on
+purpose, so the job can only be run in tests against hosts that never resolve.
+
+The Website page now also shows the pause, with the control that undoes it.

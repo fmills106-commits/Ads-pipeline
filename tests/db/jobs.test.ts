@@ -27,6 +27,7 @@ const payload = () => ({
   businessId: crypto.randomUUID(),
   requestedUrl: 'https://example.com/',
   isRescan: false,
+  ownerRequested: false,
 });
 
 beforeEach(async () => {

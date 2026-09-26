@@ -336,17 +336,72 @@ describe('starting a scan', () => {
     });
   });
 
-  it('refuses while the business is paused', async () => {
-    const workspaceContext = await requireWorkspaceContext(user, workspace.id);
-    const business = await createBusiness(workspaceContext, {
-      name: 'Paused Co',
-      websiteUrl: 'https://example.com',
-    });
-    let context = await requireBusinessContext(user, business.id);
-    await pauseEverything(context, { reason: 'Test' });
+  describe('while advertising is paused', async () => {
+    /*
+     * Reading your own website spends nothing, launches nothing and
+     * advertises nothing. Refusing it while paused told an owner that the way
+     * to look at their own site was to turn advertising back on — which is
+     * the one action here that can start spending money.
+     */
+    const pausedBusiness = async (name: string) => {
+      const workspaceContext = await requireWorkspaceContext(user, workspace.id);
+      const business = await createBusiness(workspaceContext, {
+        name,
+        websiteUrl: 'https://example.com',
+      });
+      const context = await requireBusinessContext(user, business.id);
+      await pauseEverything(context, { reason: 'Test' });
+      return requireBusinessContext(user, business.id);
+    };
 
-    context = await requireBusinessContext(user, business.id);
-    await expect(startScan(context)).rejects.toMatchObject({ code: 'CONFLICT' });
+    it('still refuses a scan the system decided to run', async () => {
+      const context = await pausedBusiness('Paused Co');
+      await expect(startScan(context)).rejects.toMatchObject({ code: 'CONFLICT' });
+    });
+
+    it('reads the site when the owner asks', async () => {
+      const context = await pausedBusiness('Paused But Curious');
+      const result = await startScan(context, { trigger: 'OWNER' });
+      expect(result.scanRun.status).toBe('QUEUED');
+    });
+
+    it('lets that scan actually run rather than cancelling it later', async () => {
+      // Queued and then cancelled by the worker is worse than refused up
+      // front: the button appears to work, and nothing happens minutes later.
+      const context = await pausedBusiness('Paused And Queued');
+      const { scanRun } = await startScan(context, { trigger: 'OWNER' });
+
+      const job = await prisma.job.findFirstOrThrow({
+        where: { businessId: context.businessId },
+      });
+      expect(job.payload).toMatchObject({ ownerRequested: true });
+
+      const outcome = await runWebsiteScanJob(job.payload);
+      expect(outcome).not.toMatchObject({ reason: 'business-paused' });
+
+      const after = await prisma.scanRun.findUniqueOrThrow({ where: { id: scanRun.id } });
+      expect(after.stopReason).not.toBe('business-paused');
+    });
+
+    it('cancels a queued automatic scan if a pause lands first', async () => {
+      const workspaceContext = await requireWorkspaceContext(user, workspace.id);
+      const business = await createBusiness(workspaceContext, {
+        name: 'Paused Mid Queue',
+        websiteUrl: 'https://example.com',
+      });
+      let context = await requireBusinessContext(user, business.id);
+      const { scanRun } = await startScan(context);
+
+      await pauseEverything(context, { reason: 'Test' });
+      context = await requireBusinessContext(user, business.id);
+
+      const job = await prisma.job.findFirstOrThrow({ where: { businessId: business.id } });
+      const outcome = await runWebsiteScanJob(job.payload);
+
+      expect(outcome).toMatchObject({ cancelled: true, reason: 'business-paused' });
+      const after = await prisma.scanRun.findUniqueOrThrow({ where: { id: scanRun.id } });
+      expect(after.status).toBe('CANCELLED');
+    });
   });
 
   it('writes an audit entry and a plain-language activity entry', async () => {
