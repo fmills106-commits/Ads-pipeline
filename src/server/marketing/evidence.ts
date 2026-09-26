@@ -117,7 +117,7 @@ export async function gatherEvidence(
       take: options.productId ? 1 : MAX_PRODUCTS,
       // The alt text is the point of including these: a physical product's
       // pictures are often described better than the product is.
-      include: { images: { orderBy: { position: 'asc' }, take: 4 } },
+      include: { images: { orderBy: { position: 'asc' }, take: 6 } },
     }),
     db.websitePage.findMany({
       where: { businessId: context.businessId, pageType: { in: INFORMATIVE_PAGES } },
@@ -217,9 +217,15 @@ const MAX_IMAGE_LINES = 40;
  * Nothing here is generated. It is the merchant's own alt text, which is free
  * to read and which no vision model can improve on where it exists.
  */
+interface EvidenceImage {
+  altText: string | null;
+  width: number | null;
+  height: number | null;
+}
+
 function renderImages(
   pages: Array<{ url: string; imageAlts: string[] }>,
-  products: Array<Product & { images?: Array<{ altText: string | null }> }>,
+  products: Array<Product & { images?: EvidenceImage[] }>,
 ): string {
   const lines: string[] = [];
   const seen = new Set<string>();
@@ -232,7 +238,12 @@ function renderImages(
   };
 
   for (const product of products) {
-    for (const alt of productImageAlts(product)) add(`${product.name}: ${alt}`);
+    for (const image of product.images ?? []) {
+      const alt = image.altText?.trim();
+      const shape = describeShape(image.width, image.height);
+      if (!alt && !shape) continue;
+      add([`${product.name}:`, alt, shape && `(${shape})`].filter(Boolean).join(' '));
+    }
   }
   for (const page of pages) {
     for (const alt of page.imageAlts) add(alt);
@@ -250,17 +261,28 @@ function renderImages(
 }
 
 /**
- * Alt text stored against a product's images.
+ * An image's shape, in the terms that decide whether it can be advertised.
  *
- * `images` is a relation, so it is absent unless the caller included it. The
- * dossier does not, to keep the query cheap — this reads whatever is there and
- * returns nothing when it is not, rather than making every writer pay for a
- * join most of them do not use.
+ * Not decoration. Meta will not take a creative below roughly 1080px on its
+ * short side, and wants square or 4:5 — so "every photograph on this shop is
+ * 400px wide" is a finding an owner can act on, and a 32×32 file attached to a
+ * product is a favicon whatever the markup claims.
+ *
+ * Only ever reports what the page declared. An unknown size stays unknown
+ * rather than being guessed or fetched: downloading every image to measure it
+ * is bandwidth a scan does not need to spend.
  */
-function productImageAlts(product: { images?: Array<{ altText: string | null }> }): string[] {
-  return (product.images ?? [])
-    .map((image) => image.altText?.trim())
-    .filter((alt): alt is string => Boolean(alt));
+function describeShape(width: number | null, height: number | null): string | null {
+  if (width === null || height === null) return null;
+
+  const ratio = width / height;
+  const orientation = ratio > 1.15 ? 'landscape' : ratio < 0.87 ? 'portrait' : 'square';
+  const shortest = Math.min(width, height);
+
+  const usable =
+    shortest >= 1080 ? '' : shortest >= 500 ? ', small for an ad' : ', far too small for an ad';
+
+  return `${width}×${height}, ${orientation}${usable}`;
 }
 
 function renderPages(

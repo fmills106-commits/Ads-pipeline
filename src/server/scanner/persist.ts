@@ -302,8 +302,17 @@ export async function persistScan(
               altText: image.altText ?? null,
               isPrimary: index === 0,
               position: index,
+              width: image.width ?? null,
+              height: image.height ?? null,
             },
-            update: { altText: image.altText ?? null, position: index },
+            update: {
+              altText: image.altText ?? null,
+              position: index,
+              // Only overwrite with something: a page that stopped declaring
+              // its sizes should not erase what an earlier scan learned.
+              ...(image.width === undefined ? {} : { width: image.width }),
+              ...(image.height === undefined ? {} : { height: image.height }),
+            },
           })
           .catch(() => undefined); // A malformed image URL must not fail the scan.
       }

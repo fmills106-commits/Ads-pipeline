@@ -260,6 +260,61 @@ describe('what the pictures show', () => {
     expect(evidence.imageText).toMatch(/describe images, not guarantees/);
   });
 
+  it('says whether an image is usable as an advertisement', async () => {
+    /*
+     * `ProductImage.width` and `.height` have existed since Phase 2 and
+     * nothing ever filled them, so the engine knew every picture's address and
+     * nothing about its shape. Shape is what decides whether a shop can
+     * advertise at all: Meta will not take a creative below roughly 1080px on
+     * its short side, and "every photograph here is 400px wide" is a finding an
+     * owner can act on.
+     */
+    const { context, productId } = await businessWithProduct();
+    await prisma.productImage.createMany({
+      data: [
+        {
+          productId,
+          sourceUrl: 'https://example.com/img/big.webp',
+          altText: 'The display box',
+          width: 1200,
+          height: 1200,
+          position: 0,
+        },
+        {
+          productId,
+          sourceUrl: 'https://example.com/img/small.webp',
+          altText: 'A thumbnail',
+          width: 320,
+          height: 240,
+          position: 1,
+        },
+      ],
+    });
+
+    const evidence = await gatherEvidence(context, { productId });
+
+    expect(evidence.imageText).toContain('1200×1200, square');
+    expect(evidence.imageText).toContain('320×240, landscape, far too small for an ad');
+  });
+
+  it('leaves an undeclared size unknown rather than guessing it', async () => {
+    // Downloading every image to measure it is bandwidth a scan need not
+    // spend, and a guessed dimension would be a fact with nothing behind it.
+    const { context, productId } = await businessWithProduct();
+    await prisma.productImage.create({
+      data: {
+        productId,
+        sourceUrl: 'https://example.com/img/unknown.webp',
+        altText: 'No size declared',
+        position: 0,
+      },
+    });
+
+    const evidence = await gatherEvidence(context, { productId });
+    expect(evidence.imageText).toContain('No size declared');
+    expect(evidence.imageText).not.toMatch(/\d+×\d+/);
+  });
+
   it('is empty when the site describes none of its pictures', async () => {
     const { context } = await businessWithProduct();
     expect((await gatherEvidence(context)).imageText).toBe('');

@@ -66,7 +66,14 @@ export interface ExtractedProduct {
   sku?: ExtractedValue;
   brand?: ExtractedValue;
   category?: ExtractedValue;
-  images: Array<{ url: string; altText?: string; isPrimary: boolean }>;
+  images: Array<{
+    url: string;
+    altText?: string;
+    isPrimary: boolean;
+    /** As the page declares them. See `declaredSize`. */
+    width?: number;
+    height?: number;
+  }>;
   statedOffers: StatedOffer[];
   callsToAction: string[];
   /**
@@ -891,6 +898,7 @@ function extractProduct(input: {
       url: resolved,
       isPrimary: result.images.length === 0,
       ...(alt ? { altText: alt } : {}),
+      ...declaredSize(node),
     });
   }
 
@@ -1183,6 +1191,39 @@ function sellsInPlace(card: HTMLElement): boolean {
  * one of the others — taking `src` alone would store a 1x1 transparent GIF as
  * the product photograph.
  */
+/**
+ * The size a page says an image is.
+ *
+ * Free, and worth having. `ProductImage` has carried `width` and `height`
+ * since Phase 2 and nothing ever filled them, so the engine knew every
+ * picture's address and nothing about its shape.
+ *
+ * Shape decides what can be advertised. Meta wants square and 4:5 and will not
+ * take an image below about 1080px on its short side, so "this shop has
+ * beautiful photographs, all 400px wide" is a real finding an owner can act
+ * on — and a 32×32 file is a favicon, not a product shot, whatever it is
+ * attached to.
+ *
+ * Read from the attributes rather than by downloading the file. Modern pages
+ * declare them to stop the layout jumping, so this costs no request at all;
+ * when a page does not declare them the size stays unknown, which is honest
+ * and cheaper than fetching every image to find out.
+ */
+function declaredSize(node: HTMLElement): { width?: number; height?: number } {
+  const read = (name: string): number | undefined => {
+    const raw = node.getAttribute(name);
+    if (!raw) return undefined;
+    // Percentages and `auto` are layout, not pixels.
+    const parsed = Number.parseInt(raw.trim(), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 20_000) return undefined;
+    return parsed;
+  };
+
+  const width = read('width');
+  const height = read('height');
+  return { ...(width === undefined ? {} : { width }), ...(height === undefined ? {} : { height }) };
+}
+
 function imagesWithin(
   card: HTMLElement,
   pageUrl: string,
@@ -1217,6 +1258,7 @@ function imagesWithin(
       url: resolved,
       ...(alt ? { altText: alt.slice(0, 300) } : {}),
       isPrimary: images.length === 0,
+      ...declaredSize(image),
     });
 
     if (images.length >= 6) break;
