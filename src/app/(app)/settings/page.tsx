@@ -4,8 +4,6 @@ import Link from 'next/link';
 import type { ProviderCapability } from '@prisma/client';
 import { Card, PageHeader, cx } from '@/components/ui/primitives';
 import { requireCurrentUser } from '@/server/auth/current-user';
-import { listWorkspacesForUser, requireWorkspaceContext } from '@/server/tenancy/context';
-import { listBusinesses } from '@/server/business/service';
 import { summariseCapability } from '@/server/providers';
 import { loadEnabledPaidProviders } from '@/server/providers/run';
 import { listProviderSettings, paidSpendPossible, whyBlocked } from '@/server/providers/settings';
@@ -18,6 +16,7 @@ import { AdvancedSettings } from './advanced-settings';
 import { BusinessName } from './business-name';
 import { PaidProvider } from './paid-provider';
 import { ThemeSwitch } from './theme-switch';
+import { resolveActiveBusiness } from '@/server/tenancy/active-business';
 
 export const metadata: Metadata = { title: 'Settings' };
 
@@ -43,25 +42,20 @@ const VISIBLE_CAPABILITIES: ProviderCapability[] = [
 
 export default async function SettingsPage() {
   const user = await requireCurrentUser();
-  const workspaces = await listWorkspacesForUser(user);
-  const active = workspaces[0];
+  const { workspaceContext: context, business } = await resolveActiveBusiness(user);
 
-  if (!active) {
+  if (!context) {
     return <PageHeader title="Settings" description="Your account has no workspace." />;
   }
 
-  const context = await requireWorkspaceContext(user, active.workspace.id);
-  const [businesses, enabledPaid, costs, providerSettings] = await Promise.all([
-    listBusinesses(context),
-    loadEnabledPaidProviders(active.workspace.id),
-    costSummary(active.workspace.id),
+  const [enabledPaid, costs, providerSettings] = await Promise.all([
+    loadEnabledPaidProviders(context.workspace.id),
+    costSummary(context.workspace.id),
     listProviderSettings(context),
   ]);
 
   const settingsByKey = new Map(providerSettings.map((row) => [row.providerKey, row]));
   const paidPossible = paidSpendPossible();
-
-  const business = businesses[0];
   const capabilities = VISIBLE_CAPABILITIES.map((capability) =>
     summariseCapability(capability, enabledPaid),
   );
@@ -178,7 +172,7 @@ export default async function SettingsPage() {
                   capability.paidAlternatives.map((alternative) => (
                     <PaidProvider
                       key={alternative.key}
-                      workspaceId={active.workspace.id}
+                      workspaceId={context.workspace.id}
                       providerKey={alternative.key}
                       label={alternative.label}
                       description={alternative.description}
@@ -209,8 +203,8 @@ export default async function SettingsPage() {
         <AdvancedSettings
           userName={user.name}
           userEmail={user.email}
-          workspaceName={active.workspace.name}
-          workspaceRole={active.role}
+          workspaceName={context.workspace.name}
+          workspaceRole={context.role}
           zeroCostMode={isZeroCostMode()}
           ceilings={costs.ceilings}
           business={

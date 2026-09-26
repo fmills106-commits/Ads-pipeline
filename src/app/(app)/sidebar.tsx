@@ -11,11 +11,17 @@ export function Sidebar({
   userName,
   userEmail,
   logout,
+  businessSwitcher,
 }: {
   workspaceName: string;
   userName: string;
   userEmail: string;
   logout: ReactNode;
+  /**
+   * Which website the screens are about. A server component, so it arrives as
+   * a node — this file is a client component for `usePathname` alone.
+   */
+  businessSwitcher: ReactNode;
 }) {
   const pathname = usePathname();
 
@@ -33,6 +39,7 @@ export function Sidebar({
           <p className="mt-1 truncate text-sm font-medium" title={workspaceName}>
             {workspaceName}
           </p>
+          {businessSwitcher}
         </div>
         {/* On a phone the footer block below is hidden, so sign-out lives here. */}
         <div className="shrink-0 md:hidden">{logout}</div>

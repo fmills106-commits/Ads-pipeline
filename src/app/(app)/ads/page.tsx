@@ -2,16 +2,12 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Card, EmptyState, PageHeader, Provenance, cx } from '@/components/ui/primitives';
 import { requireCurrentUser } from '@/server/auth/current-user';
-import {
-  listWorkspacesForUser,
-  requireBusinessContext,
-  requireWorkspaceContext,
-} from '@/server/tenancy/context';
-import { listBusinesses } from '@/server/business/service';
 import { getAnalysis } from '@/server/marketing/analysis';
 import { prisma } from '@/lib/db';
 import { formatCents } from '@/lib/budget';
 import { MarketingControl } from './marketing-control';
+import { resolveActiveBusiness } from '@/server/tenancy/active-business';
+import { requireBusinessContext } from '@/server/tenancy/context';
 
 export const metadata: Metadata = { title: 'Ads' };
 
@@ -28,14 +24,10 @@ export const metadata: Metadata = { title: 'Ads' };
  */
 export default async function AdsPage() {
   const user = await requireCurrentUser();
-  const workspaces = await listWorkspacesForUser(user);
-  const active = workspaces[0];
-  if (!active)
-    return <EmptyState title="No workspace" description="Your account has no workspace." />;
+  const { workspaceContext, business } = await resolveActiveBusiness(user);
 
-  const workspaceContext = await requireWorkspaceContext(user, active.workspace.id);
-  const businesses = await listBusinesses(workspaceContext);
-  const business = businesses[0];
+  if (!workspaceContext)
+    return <EmptyState title="No workspace" description="Your account has no workspace." />;
 
   if (!business) {
     return (

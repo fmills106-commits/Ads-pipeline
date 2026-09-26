@@ -2,12 +2,6 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { Card, cx, EmptyState } from '@/components/ui/primitives';
 import { requireCurrentUser } from '@/server/auth/current-user';
-import {
-  listWorkspacesForUser,
-  requireBusinessContext,
-  requireWorkspaceContext,
-} from '@/server/tenancy/context';
-import { listBusinesses } from '@/server/business/service';
 import { isOnboarded, GOAL_CHOICES, AUTOMATION_CHOICES } from '@/server/business/onboarding';
 import { pendingAttentionCount, recentActivity } from '@/server/activity/feed';
 import { costSummary } from '@/server/cost/ledger';
@@ -17,6 +11,8 @@ import { getScanStatus } from '@/server/scanner/service';
 import { PauseControl } from './pause-control';
 import { ActivityFeed } from './activity-feed';
 import { AttentionBanner } from './attention-banner';
+import { resolveActiveBusiness } from '@/server/tenancy/active-business';
+import { requireBusinessContext } from '@/server/tenancy/context';
 
 export const metadata: Metadata = { title: 'Dashboard' };
 
@@ -30,10 +26,9 @@ export const metadata: Metadata = { title: 'Dashboard' };
  */
 export default async function DashboardPage() {
   const user = await requireCurrentUser();
-  const workspaces = await listWorkspacesForUser(user);
-  const active = workspaces[0];
+  const { workspaceContext, business } = await resolveActiveBusiness(user);
 
-  if (!active) {
+  if (!workspaceContext) {
     return (
       <EmptyState
         title="No workspace"
@@ -41,10 +36,6 @@ export default async function DashboardPage() {
       />
     );
   }
-
-  const workspaceContext = await requireWorkspaceContext(user, active.workspace.id);
-  const businesses = await listBusinesses(workspaceContext);
-  const business = businesses[0];
 
   if (!business) {
     return (
@@ -84,7 +75,7 @@ export default async function DashboardPage() {
   const [activity, attention, costs, scan] = await Promise.all([
     recentActivity(businessContext, 12),
     pendingAttentionCount(businessContext),
-    costSummary(active.workspace.id),
+    costSummary(workspaceContext.workspace.id),
     getScanStatus(businessContext),
   ]);
 

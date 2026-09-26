@@ -16,7 +16,11 @@ export const metadata: Metadata = { title: 'Set up' };
  * business owner answers what they already know about their own business and
  * the system derives everything else.
  */
-export default async function SetupPage() {
+export default async function SetupPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const user = await requireCurrentUser();
   const workspaces = await listWorkspacesForUser(user);
   const active = workspaces[0];
@@ -25,9 +29,20 @@ export default async function SetupPage() {
   const context = await requireWorkspaceContext(user, active.workspace.id);
   const businesses = await listBusinesses(context);
 
-  // Already finished? There is nothing to set up.
-  const unfinished = businesses.find((business) => !isOnboarded(business));
-  if (businesses.length > 0 && !unfinished) redirect('/dashboard');
+  /*
+   * `?another=1` is how an owner adds a second website.
+   *
+   * Without it this page sends a finished workspace to the dashboard, which
+   * was right while one business was all there could be and is now the thing
+   * that made a second unreachable. The flag says "I know, I want another
+   * one", so an unfinished business is not resumed either: resuming would
+   * silently edit the first site when they asked to add a second.
+   */
+  const another = (await searchParams)['another'] === '1';
+
+  // Already finished, and not deliberately adding another? Nothing to set up.
+  const unfinished = another ? undefined : businesses.find((business) => !isOnboarded(business));
+  if (!another && businesses.length > 0 && !unfinished) redirect('/dashboard');
 
   const env = getEnv();
 
