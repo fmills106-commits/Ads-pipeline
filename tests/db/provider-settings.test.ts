@@ -42,11 +42,14 @@ const context = async () => requireWorkspaceContext(user, workspace.id);
 /*
  * A paid provider that exists.
  *
- * Every paid descriptor the application ships is currently a placeholder whose
- * adapter is not written — `implemented: false` — and those are refused before
- * any environment variable is consulted, which is correct and makes them
- * useless for testing the environment gates. So the gates are tested against
- * one that is implemented, and a separate test covers the placeholders.
+ * `ai.anthropic` is now real, but it reaches out to a network service, so it is
+ * not what these tests want: they are about the switches in front of a paid
+ * provider, not about any particular one. The remaining paid descriptors are
+ * placeholders whose adapters are not written — `implemented: false` — and those
+ * are refused before any environment variable is consulted, which is correct and
+ * makes them useless for testing the environment gates. So the gates are tested
+ * against a provider registered here, and separate tests cover both the real one
+ * and the placeholders.
  */
 const PAID_KEY = 'ai.test-paid';
 
@@ -147,10 +150,33 @@ describe('whyBlocked', () => {
 
   it('refuses one whose adapter is not written, before anything else', async () => {
     /*
-     * `ai.anthropic` is registered so the interface can honestly list what is
+     * `image.external` is registered so the interface can honestly list what is
      * coming; its factory throws. Without this, the switch existed and would
-     * have let an owner turn on a provider that then failed every AI call
+     * have let an owner turn on a provider that then failed every image request
      * from then on — the worst kind of working button.
+     */
+    await withEnv(
+      {
+        ZERO_COST_MODE: 'false',
+        IMAGE_PROVIDER_API_KEY: 'test-key',
+        MAX_DAILY_PROVIDER_COST_CENTS: '500',
+        MAX_MONTHLY_PROVIDER_COST_CENTS: '5000',
+      },
+      async () => {
+        expect(whyBlocked('image.external')?.reason).toBe('not-implemented');
+        await expect(
+          setProviderEnabled(await context(), { providerKey: 'image.external', enabled: true }),
+        ).rejects.toMatchObject({ code: 'CONFLICT' });
+      },
+    );
+  });
+
+  it('lets the real writer through once all three switches are set', async () => {
+    /*
+     * The inverse of the test above, and the reason that one had to change: the
+     * paid writer is no longer a placeholder. An owner who has turned off
+     * zero-cost mode, added a key and raised a ceiling may now switch it on —
+     * and until all three of those hold, they may not.
      */
     await withEnv(
       {
@@ -160,10 +186,30 @@ describe('whyBlocked', () => {
         MAX_MONTHLY_PROVIDER_COST_CENTS: '5000',
       },
       async () => {
-        expect(whyBlocked('ai.anthropic')?.reason).toBe('not-implemented');
-        await expect(
-          setProviderEnabled(await context(), { providerKey: 'ai.anthropic', enabled: true }),
-        ).rejects.toMatchObject({ code: 'CONFLICT' });
+        expect(whyBlocked('ai.anthropic')).toBeNull();
+
+        const setting = await setProviderEnabled(await context(), {
+          providerKey: 'ai.anthropic',
+          enabled: true,
+          maxDailyCostCents: 100,
+        });
+
+        expect(setting.enabled).toBe(true);
+        expect(setting.maxDailyCostCents).toBe(100);
+      },
+    );
+  });
+
+  it('refuses the real writer with no key, whatever else is set', async () => {
+    await withEnv(
+      {
+        ZERO_COST_MODE: 'false',
+        ANTHROPIC_API_KEY: '',
+        MAX_DAILY_PROVIDER_COST_CENTS: '500',
+        MAX_MONTHLY_PROVIDER_COST_CENTS: '5000',
+      },
+      async () => {
+        expect(whyBlocked('ai.anthropic')?.reason).toBe('no-credentials');
       },
     );
   });

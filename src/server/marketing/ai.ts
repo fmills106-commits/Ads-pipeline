@@ -1,17 +1,18 @@
 import type { ZodTypeAny, z } from 'zod';
 import { ZodError } from 'zod';
 import { prisma, type Db } from '@/lib/db';
+import { getEnv } from '@/lib/env';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { loadEnabledPaidProviders, runProvider } from '@/server/providers';
+import { jsonSchemaOf } from '@/server/providers/output-schema';
+import { DEFAULT_MAX_OUTPUT_TOKENS, estimateCallCostCents } from '@/server/providers/pricing';
 import type { AIProvider } from '@/server/providers/types';
 import type { BusinessContext } from '@/server/tenancy/context';
 import {
   sanitiseExtractedText,
   scanForInjectionSignals,
   truncateForPrompt,
-  untrustedPreamble,
-  wrapUntrusted,
 } from '@/server/scanner/untrusted';
 
 /**
@@ -88,6 +89,7 @@ export async function generate<TSchema extends ZodTypeAny>(
   }
 
   const enabledPaid = await loadEnabledPaidProviders(context.workspace.id);
+  const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
   /** One attempt, through the provider guard so the call is priced and logged. */
   const callOnce = (instruction: string, label: string) =>
@@ -99,12 +101,26 @@ export async function generate<TSchema extends ZodTypeAny>(
       enabledPaid,
       subjectType: 'AiDecision',
       subjectId: label,
+      /*
+       * Priced before the provider is even chosen, because the ceiling is
+       * checked before the call and an estimate of zero is read as "free" and
+       * skips every limit. That was harmless while no paid AI adapter existed
+       * and would have been a hole the moment one did: a real model would have
+       * spent with no ceiling in force. Inert on the free path, which is never
+       * budget-checked at all.
+       */
+      estimatedCostCents: estimateCallCostCents({
+        model: getEnv().ANTHROPIC_MODEL,
+        promptChars: promptLengthOf(instruction, prepared.data),
+        maxOutputTokens,
+      }),
       execute: (provider) =>
         provider.complete<z.infer<TSchema>>({
           task,
           instruction,
           ...(prepared.data ? { data: prepared.data } : {}),
-          ...(options.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}),
+          maxOutputTokens,
+          outputSchema: jsonSchemaOf(schema),
           // Validation happens inside the provider call, so malformed output
           // never becomes a value anyone could accidentally use.
           parse: (raw) => schema.parse(raw) as z.infer<TSchema>,
@@ -209,31 +225,21 @@ function prepareUntrusted(raw: Record<string, string> | undefined): PreparedInpu
 }
 
 /**
- * Builds a prompt with untrusted values contained, for providers that need one.
- *
- * Every field gets its own random delimiter, so one product description cannot
- * close a block and start speaking about the next. Exported because the
- * Anthropic provider will need exactly this and must not reinvent it — and
- * tested directly, so the containment is verified whether or not a paid
- * provider is configured.
+ * Prompt assembly moved to the provider layer, where the providers that build
+ * prompts live. Re-exported here because this is where the containment rules
+ * are documented and where readers of this module will look for it.
  */
-export function buildContainedPrompt(
-  instruction: string,
-  data: Record<string, string>,
-): { prompt: string; tokens: string[] } {
-  const tokens: string[] = [];
-  const blocks: string[] = [];
+export { buildContainedPrompt } from '@/server/providers/prompt';
 
-  for (const [label, content] of Object.entries(data)) {
-    const block = wrapUntrusted(label, content);
-    tokens.push(block.token);
-    blocks.push(block.text);
-  }
+/** Roughly how long the prompt will be, for pricing it before it is built. */
+function promptLengthOf(instruction: string, data: Record<string, string> | undefined): number {
+  const dataChars = data
+    ? Object.entries(data).reduce((total, [label, value]) => total + label.length + value.length, 0)
+    : 0;
 
-  return {
-    prompt: [instruction, '', untrustedPreamble(tokens), '', ...blocks].join('\n'),
-    tokens,
-  };
+  // The wrapper around each field adds delimiters and a preamble; a fifth on
+  // top covers those without pretending to a precision this does not have.
+  return Math.ceil((instruction.length + dataChars) * 1.2);
 }
 
 /** The trusted instruction, with the standing warning about the data blocks. */
@@ -256,6 +262,14 @@ function composeRepairInstruction(instruction: string, preamble: string, issue: 
 
 function isSchemaFailure(thrown: unknown): boolean {
   if (thrown instanceof ZodError) return true;
+  /*
+   * A provider may find the output unusable before validation gets near it —
+   * text that is not JSON at all, or a response cut off mid-sentence. That is
+   * the same kind of problem as a failed parse and deserves the same single
+   * rephrased retry; what must *not* land here is a refusal or a timeout, which
+   * is why those carry their own codes.
+   */
+  if (thrown instanceof AppError && thrown.code === 'AI_OUTPUT_INVALID') return true;
   return thrown instanceof Error && thrown.cause instanceof ZodError;
 }
 

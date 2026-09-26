@@ -36,7 +36,7 @@ one local, free implementation.
 
 | Capability                     | Free implementation (default)                            | Paid alternative             |
 | ------------------------------ | -------------------------------------------------------- | ---------------------------- |
-| AI                             | `ai.local` — deterministic strategy and copy             | `ai.anthropic` (Phase 3)     |
+| AI                             | `ai.local` — deterministic strategy and copy             | `ai.anthropic` — built, off  |
 | Image generation               | `image.local` — SVG creatives from templates             | `image.external` (Phase 4)   |
 | Advertising                    | `advertising.simulated` — full campaigns, simulated data | `advertising.meta` (Phase 6) |
 | Storage                        | `storage.local` — filesystem                             | `storage.s3` (Phase 4)       |
@@ -127,6 +127,46 @@ Everything simulated is **labelled**. `ExternalRef` and `Insights` carry
 carries `simulated: true`, and the dashboard shows a simulation banner. A
 simulated campaign that looked real would be the most damaging thing this
 product could do.
+
+---
+
+## The one thing that cannot be free
+
+`ai.anthropic` is the only paid provider with an adapter behind it, and it is
+worth being precise about why, because "everything is free" and "there is a paid
+writer" have to both be true.
+
+The free writer is real. It reads the dossier, quotes the merchant's own
+sentence about their own product, keeps inside the claim rules and costs nothing,
+for ever. What it cannot do is write. It cannot read eight pages about soft-foam
+Halloween squishies and produce a sentence nobody would guess was generated,
+because writing needs a language model and no language model runs for nothing.
+
+So the arrangement is not free writing. It is:
+
+- **Off by default and complete without it.** Every task it serves has a free
+  implementation that passes the same validation. The three switches above stand
+  in front of it unchanged.
+- **Priced before it runs.** `src/server/providers/pricing.ts` estimates the
+  call from the prompt and the output allowance, and the ceiling is checked
+  against that estimate. This is not decoration: `checkBudget` reads an estimate
+  of zero as "free" and skips every limit, so before there was an adapter the
+  estimate did not matter, and the moment there was one it decided whether
+  limits applied at all.
+- **Recorded in cents afterwards**, from the tokens the model reports at the
+  published rate for the model that answered — and recorded as _unknown_ rather
+  than guessed when this build has no checked price for that model. The
+  pessimistic estimate stands in wherever spend is totalled.
+- **Never cached.** Prompt caching would be cheaper, and it is deliberately not
+  used: every untrusted block is wrapped in a per-call random delimiter, so no
+  two prompts share a prefix. Containment beats the discount.
+- **Honest about failure.** A refusal is `PROVIDER_REJECTED` and final. Output
+  that is not the requested shape is `AI_OUTPUT_INVALID`, which buys exactly one
+  rephrased retry, because the retry is a second billed call.
+
+`ANTHROPIC_MODEL` picks the model. The default is a mid-priced one on purpose; a
+larger model writes better and costs more, and that is the owner's decision to
+make, not a default to be quietly generous with.
 
 ---
 

@@ -156,6 +156,19 @@ export interface AICompletionRequest<T> {
   /** Validates the response. Malformed output never reaches the caller. */
   parse: (raw: unknown) => T;
   maxOutputTokens?: number;
+  /**
+   * JSON Schema describing what `parse` will accept.
+   *
+   * Optional, and a provider may ignore it — the local one does, since it
+   * builds its output from the shape rather than the other way round. A
+   * provider talking to a real model uses it to constrain generation, which
+   * matters for cost as much as for quality: an unusable response is a billed
+   * call, and the repair is a second one.
+   *
+   * Derived from the caller's schema rather than written by hand, so it cannot
+   * drift away from what validation actually requires.
+   */
+  outputSchema?: Record<string, unknown>;
 }
 
 export interface ImageGenerationProvider extends Provider {

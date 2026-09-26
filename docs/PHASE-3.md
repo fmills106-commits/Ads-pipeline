@@ -135,9 +135,17 @@ page leads with "this is a placeholder, not a recommendation". Connecting a
 real provider is a Settings change, and the shape of what is stored does not
 move.
 
-**`ai.anthropic` is not built.** The seam is there and the schemas are there;
-the adapter is not. It is the obvious next small piece, and it is what turns
-this phase's output from a demonstration into something worth reading.
+**`ai.anthropic` is now built, and off.** The adapter is in
+`src/server/providers/external/ai-anthropic.ts`; `docs/ZERO-COST.md` has the
+whole argument for why it is the one thing that cannot be free and what keeps it
+optional. Nothing in this phase changes shape when it is switched on: the same
+schemas, the same validation, the same decision records. What changes is that
+the copy is written rather than composed.
+
+It has never made a live call. Every branch of it is tested against a stand-in
+client — containment, token accounting, refusals, prose where JSON was asked
+for — but the first real request is still the first real request, and that is
+worth knowing before switching it on.
 
 **Product-level analysis is thin.** Business analysis reads across all
 products; per-product analysis producing motivations and objections is

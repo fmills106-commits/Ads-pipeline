@@ -9,6 +9,7 @@ import {
   simulatedAdvertisingDescriptor,
 } from './local/advertising';
 import { createLocalWebFetchProvider, localWebFetchDescriptor } from './local/web-fetch';
+import { anthropicAIDescriptor, createAnthropicAIProvider } from './external/ai-anthropic';
 import type { Provider } from './types';
 
 /**
@@ -52,20 +53,11 @@ export function registerAllProviders(): void {
   registerProvider(localWebFetchDescriptor, createLocalWebFetchProvider);
 
   // --- Paid alternatives: declared, configured-or-not, never on by default --
-  registerProvider(
-    {
-      key: 'ai.anthropic',
-      capability: 'AI',
-      tier: 'EXTERNAL_PAID',
-      label: 'Claude (paid)',
-      description:
-        'Higher-quality strategy and ad copy, billed per token by Anthropic. Off unless you enable it.',
-      priority: 10,
-      isConfigured: () => externalCredentials().anthropic,
-      implemented: false,
-    },
-    notYetImplemented('ai.anthropic', 3),
-  );
+  //
+  // The AI one is the only paid provider with an adapter behind it. It is still
+  // unreachable until zero-cost mode is off, a ceiling is raised, and the
+  // workspace switches it on — registering it changes nothing about that.
+  registerProvider(anthropicAIDescriptor, createAnthropicAIProvider);
 
   registerProvider(
     {

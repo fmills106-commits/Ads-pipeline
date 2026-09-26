@@ -118,7 +118,7 @@ falls back to free, and records the cost.
 | Capability       | Free (default)          | Paid alternative                   |
 | ---------------- | ----------------------- | ---------------------------------- |
 | Web fetch        | `webfetch.local`        | a scraping service, if ever needed |
-| AI               | `ai.local`              | `ai.anthropic` (Phase 3)           |
+| AI               | `ai.local`              | `ai.anthropic` — built, off        |
 | Image generation | `image.local`           | `image.external` (Phase 4)         |
 | Advertising      | `advertising.simulated` | `advertising.meta` (Phase 6)       |
 | Storage          | `storage.local`         | `storage.s3` (Phase 4)             |
