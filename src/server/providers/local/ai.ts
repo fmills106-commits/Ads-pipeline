@@ -105,20 +105,43 @@ const HANDLERS: Record<string, (request: AICompletionRequest<unknown>) => unknow
     const short = (text: string, max: number) =>
       text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
     const name = short(product, 48);
-    // Composed strictly from supplied values: no claims, no statistics, no
-    // scarcity, no superlatives. The prohibited-claims rules are satisfied by
-    // construction rather than by filtering afterwards.
+    /*
+     * The one sentence about the product that the merchant wrote themselves.
+     *
+     * This provider cannot write, and must not pretend to — but it can quote.
+     * Reciting only the name produced "Full Case. See the details and decide
+     * for yourself." for a box of soft-foam Halloween squishies, which taught
+     * the owner that the whole feature was empty. Quoting the merchant's own
+     * first sentence is not authorship and not a claim: it is the page's words,
+     * unchanged, which is the most any template can honestly do.
+     *
+     * Still composed strictly from supplied values: no statistics, no
+     * scarcity, no superlatives. The prohibited-claims rules are satisfied by
+     * construction rather than by filtering afterwards.
+     */
+    const detail = firstSentenceOf(request.data?.productDetails);
+
     return {
       simulated: true,
       variants: [
         {
-          primaryText: short(`${product}. See the details and decide for yourself.`, 500),
+          primaryText: short(
+            detail
+              ? `${product}. ${detail}`
+              : `${product}. See the details and decide for yourself.`,
+            500,
+          ),
           headline: name,
           description: 'Available now.',
           cta: 'Shop now',
         },
         {
-          primaryText: short(`Looking at ${product}? Here is what it is.`, 500),
+          primaryText: short(
+            detail
+              ? `${detail} Read more about ${product}.`
+              : `Looking at ${product}? Here is what it is.`,
+            500,
+          ),
           headline: short(`About ${name}`, 60),
           description: 'Full details on the product page.',
           cta: 'Learn more',
@@ -127,6 +150,31 @@ const HANDLERS: Record<string, (request: AICompletionRequest<unknown>) => unknow
     };
   },
 };
+
+/**
+ * The merchant's own first sentence about a product, if there is one.
+ *
+ * Reads the `Description (from …)` line that `renderProduct` writes, so this
+ * provider quotes what the owner or their page said and nothing else. Price,
+ * availability and reference lines are deliberately not mined for prose: a
+ * template stitching those into a sentence is exactly the "marketing slop"
+ * this is meant to stop producing.
+ */
+function firstSentenceOf(productDetails: unknown): string | null {
+  if (typeof productDetails !== 'string') return null;
+
+  const line = productDetails
+    .split('\n')
+    .find((candidate) => candidate.startsWith('Description (from'));
+  if (!line) return null;
+
+  const body = line.slice(line.indexOf(':') + 1).trim();
+  if (body === '' || body.length < 12) return null;
+
+  const sentence = body.split(/(?<=[.!?])\s/)[0]?.trim() ?? body;
+  const clipped = sentence.length > 180 ? `${sentence.slice(0, 179).trimEnd()}…` : sentence;
+  return /[.!?]$/.test(clipped) ? clipped : `${clipped}.`;
+}
 
 class LocalAIProvider implements AIProvider {
   readonly descriptor = DESCRIPTOR;

@@ -51,6 +51,9 @@ export const AUDIT_ACTIONS = {
   /// generic update so "who let this spend money?" is one query.
   providerEnabled: 'provider.enabled',
   providerDisabled: 'provider.disabled',
+  /// The owner described a product, or told us what it costs them — the two
+  /// things no page states and no extractor may infer.
+  productDetailsEdited: 'product.details_edited',
   integrationTokenRefreshed: 'integration.token_refreshed',
   integrationDisconnected: 'integration.disconnected',
 } as const;

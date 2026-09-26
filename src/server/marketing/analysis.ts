@@ -6,6 +6,7 @@ import type { BusinessContext } from '@/server/tenancy/context';
 import { generate } from './ai';
 import { businessAnalysisSchema, type BusinessAnalysis } from './schemas';
 import type { InferenceKind, Uncertainty } from '@prisma/client';
+import { gatherEvidence } from './evidence';
 
 /**
  * Turning what was read into what is thought.
@@ -40,15 +41,12 @@ export interface AnalyseResult {
 const MIN_FACTS_TO_ANALYSE = 3;
 
 /** Bounds on what is handed to a model, per field. */
-const MAX_FACTS = 60;
-const MAX_PRODUCTS = 25;
-const MAX_PAGE_TEXT = 6_000;
 
 export async function analyseBusiness(
   context: BusinessContext,
   db: Db = prisma,
 ): Promise<AnalyseResult> {
-  const evidence = await gatherEvidence(context, db);
+  const evidence = await gatherEvidence(context, {}, db);
 
   /*
    * Refusing is the right answer here, not proceeding with less. An analysis
@@ -56,11 +54,11 @@ export async function analyseBusiness(
    * owner would have no way to tell. Asking them to scan first is honest and
    * takes one click.
    */
-  if (evidence.facts.length < MIN_FACTS_TO_ANALYSE) {
+  if (evidence.factCount < MIN_FACTS_TO_ANALYSE) {
     throw validationError('Not enough verified information to analyse this business', {
       publicMessage:
         'We need to read your website first. Open the Website page and press “Read my website”.',
-      details: { factsFound: evidence.facts.length, required: MIN_FACTS_TO_ANALYSE },
+      details: { factsFound: evidence.factCount, required: MIN_FACTS_TO_ANALYSE },
     });
   }
 
@@ -76,13 +74,14 @@ export async function analyseBusiness(
       'reading, say so in the reasoning and set the uncertainty honestly.',
     ].join(' '),
     data: {
-      businessName: context.business.name,
+      businessName: evidence.businessName,
+      ownerNotes: evidence.ownerNotesText,
       verifiedFacts: evidence.factsText,
       products: evidence.productsText,
       pageText: evidence.pageText,
     },
     schema: businessAnalysisSchema,
-    inputSummary: `${evidence.facts.length} verified facts and ${evidence.productCount} products from ${context.business.name}`,
+    inputSummary: `${evidence.factCount} verified facts and ${evidence.productCount} products from ${evidence.businessName}`,
     factIds: evidence.factIds,
     db,
   });
@@ -150,15 +149,6 @@ function simulatedMessage(simulated: boolean, inferences: number): string {
 // Evidence
 // ---------------------------------------------------------------------------
 
-interface Evidence {
-  facts: Array<{ id: string; key: string; value: string }>;
-  factIds: string[];
-  factsText: string;
-  productsText: string;
-  pageText: string;
-  productCount: number;
-}
-
 /**
  * Collects what has actually been verified about this business.
  *
@@ -167,64 +157,6 @@ interface Evidence {
  * strategy built from someone else's catalogue would be wrong as well as
  * improper.
  */
-async function gatherEvidence(context: BusinessContext, db: Db): Promise<Evidence> {
-  const [facts, products, pages] = await Promise.all([
-    db.businessFact.findMany({
-      where: { businessId: context.businessId },
-      orderBy: [{ confidence: 'desc' }, { key: 'asc' }],
-      take: MAX_FACTS,
-      select: { id: true, key: true, value: true },
-    }),
-    db.product.findMany({
-      where: { businessId: context.businessId, removedAt: null },
-      orderBy: { lastSeenAt: 'desc' },
-      take: MAX_PRODUCTS,
-      select: {
-        name: true,
-        description: true,
-        priceCents: true,
-        currency: true,
-        availability: true,
-        category: true,
-      },
-    }),
-    db.websitePage.findMany({
-      where: { businessId: context.businessId, pageType: { in: ['HOME', 'ABOUT'] } },
-      orderBy: { fetchedAt: 'desc' },
-      take: 3,
-      select: { extractedText: true },
-    }),
-  ]);
-
-  const factsText = facts.map((fact) => `${fact.key}: ${fact.value}`).join('\n');
-
-  const productsText = products
-    .map((product) => {
-      const price =
-        product.priceCents === null
-          ? 'price not stated'
-          : `${(product.priceCents / 100).toFixed(2)} ${product.currency ?? ''}`.trim();
-      return [product.name, price, product.category, product.availability]
-        .filter(Boolean)
-        .join(' · ');
-    })
-    .join('\n');
-
-  const pageText = pages
-    .map((page) => page.extractedText ?? '')
-    .join('\n\n')
-    .slice(0, MAX_PAGE_TEXT);
-
-  return {
-    facts,
-    factIds: facts.map((fact) => fact.id),
-    factsText,
-    productsText,
-    pageText,
-    productCount: products.length,
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------

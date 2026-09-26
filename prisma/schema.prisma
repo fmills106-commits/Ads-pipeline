@@ -687,6 +687,16 @@ model Product {
   name        String
   description String?
 
+  /// The owner's own words about this product.
+  ///
+  /// Separate from `description`, which is what the page said and which a
+  /// scan overwrites. An owner description has no source URL and is not
+  /// evidence about the site, so it is stored apart — and it outranks the
+  /// scraped one wherever both exist, because the person selling the thing
+  /// knows more about it than its product page does.
+  ownerDescription String?
+  ownerDescribedAt DateTime?
+
   priceCents        Int?
   /// A "was" price, only when the page states one explicitly.
   comparePriceCents Int?

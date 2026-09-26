@@ -7,6 +7,8 @@ import { formatCents } from '@/lib/budget';
 import { getEnv } from '@/lib/env';
 import { ScanControl } from './scan-control';
 import { WebsiteAddress } from './website-address';
+import { ProductDetails } from './product-details';
+import { BusinessNotes } from './business-notes';
 import { BlockedHelp } from './blocked-help';
 import { PauseControl } from '../dashboard/pause-control';
 import { resolveActiveBusiness } from '@/server/tenancy/active-business';
@@ -89,6 +91,8 @@ export default async function WebsitePage() {
           <PauseControl businessId={business.id} paused />
         </div>
       ) : null}
+
+      <BusinessNotes businessId={business.id} notes={business.description} />
 
       <WebsiteAddress
         businessId={business.id}
@@ -203,6 +207,33 @@ export default async function WebsitePage() {
                           >
                             {product.productUrl}
                           </a>
+
+                          {/*
+                            The owner's own description, marked as theirs.
+                            Shown above the control rather than inside it, so
+                            they can see at a glance which products they have
+                            told us about and which are still just a name and
+                            a price — which is the difference between an ad
+                            about soft foam and one that says "see the details
+                            and decide for yourself".
+                          */}
+                          {product.ownerDescription ? (
+                            <p className="mt-2 border-l-2 border-accent/40 pl-2 text-sm">
+                              <span className="text-ink-muted">Your description: </span>
+                              {product.ownerDescription}
+                            </p>
+                          ) : null}
+
+                          <ProductDetails
+                            businessId={business.id}
+                            productId={product.id}
+                            productName={product.name}
+                            pageDescription={product.description}
+                            ownerDescription={product.ownerDescription}
+                            costCents={product.costCents}
+                            priceCents={product.priceCents}
+                            currency={product.currency ?? 'USD'}
+                          />
                         </div>
                       </li>
                     ))}

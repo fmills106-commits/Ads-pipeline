@@ -27,9 +27,20 @@ export const DELETE = route({}, async ({ params, user }) => {
   return { id: business.id, archivedAt: business.archivedAt?.toISOString() ?? null };
 });
 
-const patchSchema = z.object({
-  name: z.string().trim().min(1, 'Enter a name').max(200),
-});
+const patchSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Enter a name').max(200).optional(),
+    /**
+     * What the owner would tell a new employee: who really buys this, what
+     * makes it different, what never to claim. A website is written to sell to
+     * somebody already interested and rarely says any of it, and no extractor
+     * was ever going to infer it.
+     */
+    description: z.string().max(4000).nullable().optional(),
+  })
+  .refine((body) => body.name !== undefined || body.description !== undefined, {
+    message: 'Nothing to change',
+  });
 
 /**
  * PATCH /api/businesses/:businessId — rename.
@@ -48,7 +59,15 @@ export const PATCH = route({ schema: patchSchema }, async ({ body, params, user 
   if (typeof businessId !== 'string') throw validationError('businessId is required');
 
   const context = await requireBusinessContext(user, businessId, { minimumRole: 'MEMBER' });
-  const business = await updateBusiness(context, { name: body.name });
+  const business = await updateBusiness(context, {
+    ...(body.name === undefined ? {} : { name: body.name }),
+    // An empty box means "I have nothing to add", which is a null rather than
+    // an empty string: the difference between unset and blank matters to the
+    // dossier, which omits the section entirely when there is nothing in it.
+    ...(body.description === undefined
+      ? {}
+      : { description: body.description?.trim() === '' ? null : body.description }),
+  });
 
-  return { id: business.id, name: business.name };
+  return { id: business.id, name: business.name, description: business.description };
 });

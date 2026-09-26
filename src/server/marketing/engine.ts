@@ -10,6 +10,7 @@ import { generate } from './ai';
 import { checkClaims, type ClaimEvidence, type ClaimViolation } from './claims';
 import { activeOffers } from './offers';
 import { adCopySetSchema, strategySetSchema } from './schemas';
+import { gatherEvidence } from './evidence';
 
 /**
  * Strategies and ad copy.
@@ -56,6 +57,8 @@ export async function generateStrategies(
     select: { id: true, key: true, value: true },
   });
 
+  const evidence = await gatherEvidence(context, { productId: product.id }, db);
+
   const result = await generate({
     context,
     task: 'strategy.generate',
@@ -64,13 +67,24 @@ export async function generateStrategies(
       'Each needs a hypothesis about why it might work, the assumptions behind it,',
       'and what an experiment should vary to test it.',
       'Do not assign scores or predict performance — nothing has been measured yet.',
-      'Use only the product details supplied; invent no features, prices or claims.',
+      'Use only the material supplied; invent no features, prices or claims.',
+      'The website text is the merchant\u2019s own words about what they sell:',
+      'draw the specifics from it rather than writing around the product name.',
     ].join(' '),
     data: {
       productName: product.name,
       productDetails: describeProduct(product),
       productFacts: facts.map((fact) => `${fact.key}: ${fact.value}`).join('\n'),
       businessVoice: `${profile.valueProposition}\nVoice: ${profile.brandVoice}`,
+      /*
+       * The whole point of the dossier reaching here. Without these three, a
+       * strategy for "Full Case" was written from a name, a price and an
+       * availability — which is how you get "A problem/solution angle may suit
+       * Full Case" instead of anything about what is in the box.
+       */
+      ownerNotes: evidence.ownerNotesText,
+      businessFacts: evidence.factsText,
+      websiteText: evidence.pageText,
     },
     schema: strategySetSchema,
     inputSummary: `Product "${product.name}" with ${facts.length} verified facts`,
@@ -171,12 +185,17 @@ export async function generateAdCopy(
   // Only an offer for *this* product may be mentioned in its copy.
   const offer = offers.find((candidate) => candidate.productId === product.id) ?? null;
 
+  const dossier = await gatherEvidence(context, { productId: product.id }, db);
+
   const result = await generate({
     context,
     task: 'copy.generate',
     instruction: [
       'Write ad variants for this product using the angle supplied.',
-      'Every factual statement must come from the product details given.',
+      'Every factual statement must come from the material given.',
+      'The website text is the merchant\u2019s own description of what they',
+      'sell: take the concrete details from it — what the thing is made of,',
+      'what it does, what comes in it — rather than writing around the name.',
       'Do not state a price unless it is supplied, do not mention a discount',
       'unless an approved offer is supplied, and make no claim about awards,',
       'ratings, stock levels, deadlines, health or income.',
@@ -190,6 +209,19 @@ export async function generateAdCopy(
         ? `${offer.type} ${offer.value ?? ''} — ${offer.rationale}`
         : 'none — do not mention any discount',
       businessVoice: profile?.brandVoice ?? 'plain and factual',
+      /*
+       * The site's own words, and the owner's.
+       *
+       * These were already being fetched here — and used only to *police* the
+       * result: `buildEvidence` below checks the copy's claims against the
+       * page. So the page decided what the writer was not allowed to say
+       * while never telling it what there was to say. That is how you get an
+       * advertisement for a box of Halloween squishies that reads "Full Case.
+       * See the details and decide for yourself."
+       */
+      ownerNotes: dossier.ownerNotesText,
+      businessFacts: dossier.factsText,
+      websiteText: dossier.pageText,
     },
     schema: adCopySetSchema,
     inputSummary: `Copy for "${product.name}" using the ${strategy.angle} angle`,
