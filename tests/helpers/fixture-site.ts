@@ -24,7 +24,7 @@ import type { AddressInfo } from 'node:net';
  * Named rather than repeated, so adding a page to the fixture updates one
  * number instead of breaking five assertions that each meant "all of them".
  */
-export const FIXTURE_PRODUCT_COUNT = 5;
+export const FIXTURE_PRODUCT_COUNT = 8;
 
 export interface FixtureSite {
   origin: string;
@@ -60,6 +60,7 @@ const ROUTES: Record<string, { body: string; type?: string; status?: number; loc
   <url><loc>http://REPLACED/products/sourdough-starter</loc><lastmod>2026-01-15</lastmod></url>
   <url><loc>http://REPLACED/products/rye-flour</loc></url>
   <url><loc>http://REPLACED/products/banneton</loc></url>
+  <url><loc>http://REPLACED/packs</loc></url>
   <url><loc>http://REPLACED/about</loc></url>
   <url><loc>http://REPLACED/shipping</loc></url>
   <url><loc>https://somewhere-else.example.com/evil</loc></url>
@@ -217,6 +218,47 @@ const ROUTES: Record<string, { body: string; type?: string; status?: number; loc
          <li><a href="/products/emmer">Emmer flour</a> <p class="price">£9.95</p>
              <button>Add to basket</button></li>
        </ul>`,
+      ),
+    },
+
+    /*
+     * A one-page shop: several pack sizes sold from a single page, with no
+     * structured data anywhere. Markup shaped like the real storefront that
+     * prompted this — the price and a shipping surcharge in sibling elements,
+     * the cart identifier on the button, and a cart panel whose zero totals
+     * must not become products.
+     *
+     * Deliberately NOT linked from the nav, so it is reached through the
+     * sitemap: the packs are the site's whole catalogue and a crawl that
+     * missed them would report a shop with nothing for sale.
+     */
+    '/packs': {
+      body: page(
+        'Pick your pack',
+        `<h1>Squishy Mystery Packs</h1>
+       <section id="packs"><div class="packs">
+         <div class="pack">
+           <span class="pack__name">Single</span>
+           <span class="pack__fig">$15</span>
+           <p class="pack__ship pack__ship--paid">+ $4.99 on its own</p>
+           <button data-add="single" data-sku="single">Add to cart</button>
+         </div>
+         <div class="pack pack--feature">
+           <span class="pack__flag">Most popular</span>
+           <span class="pack__name">3-Pack</span>
+           <span class="pack__fig">$39</span>
+           <p class="pack__ship">Free shipping</p>
+           <button data-add="three" data-sku="three">Add to cart</button>
+         </div>
+         <div class="pack">
+           <span class="pack__name">Full Case</span>
+           <span class="pack__fig">$132</span>
+           <p class="pack__ship">Free shipping</p>
+           <button data-add="case12" data-sku="case12">Add to cart</button>
+         </div>
+       </div></section>
+       <aside class="cart"><div class="cart__row">Subtotal <span>$0.00</span></div>
+         <div class="cart__row">Total <span>$0.00</span></div></aside>`,
       ),
     },
 

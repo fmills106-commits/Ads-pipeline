@@ -145,58 +145,50 @@ export async function persistScan(
   const seenProductUrls = new Set<string>();
 
   for (const page of crawl.pages) {
-    const extracted = page.extraction.product;
-    if (!extracted?.name) continue;
+    for (const extracted of page.extraction.products) {
+      if (!extracted.name) continue;
 
-    const productUrl = page.finalUrl;
-    if (seenProductUrls.has(productUrl)) continue;
-    seenProductUrls.add(productUrl);
+      /*
+       * A product's identity is the URL it was found at, which is what keeps
+       * its price history attached to it from one scan to the next.
+       *
+       * A page offering several products needs more than its own URL to tell
+       * them apart, so each carries a short identifier from the page and it
+       * becomes a fragment. A page about one product keeps the bare URL, so
+       * nothing recorded before this existed loses its history.
+       */
+      const productUrl = extracted.pageAnchor
+        ? `${page.finalUrl}#${extracted.pageAnchor}`
+        : page.finalUrl;
+      if (seenProductUrls.has(productUrl)) continue;
+      seenProductUrls.add(productUrl);
 
-    const name = String(extracted.name.value).slice(0, 500);
-    const priceCents = extracted.priceCents?.value ?? null;
-    const comparePriceCents = extracted.comparePriceCents?.value ?? null;
-    const currency = extracted.currency?.value ?? context.business.currency;
-    const availability: Availability = extracted.availability?.value ?? 'UNKNOWN';
-    const description = extracted.description?.value ?? null;
-    const sku = extracted.sku?.value ?? null;
-    const brand = extracted.brand?.value ?? null;
-    const category = extracted.category?.value ?? null;
+      const name = String(extracted.name.value).slice(0, 500);
+      const priceCents = extracted.priceCents?.value ?? null;
+      const comparePriceCents = extracted.comparePriceCents?.value ?? null;
+      const currency = extracted.currency?.value ?? context.business.currency;
+      const availability: Availability = extracted.availability?.value ?? 'UNKNOWN';
+      const description = extracted.description?.value ?? null;
+      const sku = extracted.sku?.value ?? null;
+      const brand = extracted.brand?.value ?? null;
+      const category = extracted.category?.value ?? null;
 
-    const contentHash = hashOf([
-      name,
-      description,
-      priceCents,
-      comparePriceCents,
-      currency,
-      availability,
-      sku,
-    ]);
+      const contentHash = hashOf([
+        name,
+        description,
+        priceCents,
+        comparePriceCents,
+        currency,
+        availability,
+        sku,
+      ]);
 
-    const previous = previousByUrl.get(productUrl);
-    // Cast at the boundary: these are plain data objects, but Prisma's
-    // InputJsonValue does not accept a typed interface without an index
-    // signature, and widening every extraction type to satisfy it would be
-    // worse than one explicit conversion here.
-    const snapshot = {
-      name,
-      description,
-      priceCents,
-      comparePriceCents,
-      currency,
-      availability,
-      sku,
-      brand,
-      category,
-      statedOffers: extracted.statedOffers,
-      callsToAction: extracted.callsToAction,
-    } as unknown as Prisma.InputJsonValue;
-
-    const product = await db.product.upsert({
-      where: { websiteId_productUrl: { websiteId: website.id, productUrl } },
-      create: {
-        businessId: context.businessId,
-        websiteId: website.id,
-        productUrl,
+      const previous = previousByUrl.get(productUrl);
+      // Cast at the boundary: these are plain data objects, but Prisma's
+      // InputJsonValue does not accept a typed interface without an index
+      // signature, and widening every extraction type to satisfy it would be
+      // worse than one explicit conversion here.
+      const snapshot = {
         name,
         description,
         priceCents,
@@ -206,160 +198,180 @@ export async function persistScan(
         sku,
         brand,
         category,
-        tags: [],
-        statedOffers: extracted.statedOffers as unknown as Prisma.InputJsonValue,
+        statedOffers: extracted.statedOffers,
         callsToAction: extracted.callsToAction,
-        contentHash,
-        lastSeenAt: new Date(),
-      },
-      update: {
-        name,
-        description,
-        priceCents,
-        comparePriceCents,
-        currency,
-        availability,
-        sku,
-        brand,
-        category,
-        statedOffers: extracted.statedOffers as unknown as Prisma.InputJsonValue,
-        callsToAction: extracted.callsToAction,
-        contentHash,
-        lastSeenAt: new Date(),
-        // A product that came back after being gone is no longer removed.
-        removedAt: null,
-      },
-    });
+      } as unknown as Prisma.InputJsonValue;
 
-    // --- versioning: only when something actually changed ---------------
-    if (!previous) {
-      productsNew += 1;
-      await writeVersion(product.id, 1, snapshot, [], scanRunId, db);
-      changeSummary.newProducts.push({ name, url: productUrl });
-    } else if (previous.contentHash !== contentHash) {
-      productsChanged += 1;
-
-      const changedFields = diffProduct(previous, {
-        name,
-        description,
-        priceCents,
-        comparePriceCents,
-        availability,
-        sku,
-      });
-
-      const lastVersion = await db.productVersion.findFirst({
-        where: { productId: product.id },
-        orderBy: { versionNumber: 'desc' },
-        select: { versionNumber: true },
-      });
-      await writeVersion(
-        product.id,
-        (lastVersion?.versionNumber ?? 0) + 1,
-        snapshot,
-        changedFields,
-        scanRunId,
-        db,
-      );
-
-      if (changedFields.includes('priceCents')) {
-        changeSummary.priceChanges.push({
+      const product = await db.product.upsert({
+        where: { websiteId_productUrl: { websiteId: website.id, productUrl } },
+        create: {
+          businessId: context.businessId,
+          websiteId: website.id,
+          productUrl,
           name,
-          url: productUrl,
-          fromCents: previous.priceCents,
-          toCents: priceCents,
+          description,
+          priceCents,
+          comparePriceCents,
+          currency,
+          availability,
+          sku,
+          brand,
+          category,
+          tags: [],
+          statedOffers: extracted.statedOffers as unknown as Prisma.InputJsonValue,
+          callsToAction: extracted.callsToAction,
+          contentHash,
+          lastSeenAt: new Date(),
+        },
+        update: {
+          name,
+          description,
+          priceCents,
+          comparePriceCents,
+          currency,
+          availability,
+          sku,
+          brand,
+          category,
+          statedOffers: extracted.statedOffers as unknown as Prisma.InputJsonValue,
+          callsToAction: extracted.callsToAction,
+          contentHash,
+          lastSeenAt: new Date(),
+          // A product that came back after being gone is no longer removed.
+          removedAt: null,
+        },
+      });
+
+      // --- versioning: only when something actually changed ---------------
+      if (!previous) {
+        productsNew += 1;
+        await writeVersion(product.id, 1, snapshot, [], scanRunId, db);
+        changeSummary.newProducts.push({ name, url: productUrl });
+      } else if (previous.contentHash !== contentHash) {
+        productsChanged += 1;
+
+        const changedFields = diffProduct(previous, {
+          name,
+          description,
+          priceCents,
+          comparePriceCents,
+          availability,
+          sku,
+        });
+
+        const lastVersion = await db.productVersion.findFirst({
+          where: { productId: product.id },
+          orderBy: { versionNumber: 'desc' },
+          select: { versionNumber: true },
+        });
+        await writeVersion(
+          product.id,
+          (lastVersion?.versionNumber ?? 0) + 1,
+          snapshot,
+          changedFields,
+          scanRunId,
+          db,
+        );
+
+        if (changedFields.includes('priceCents')) {
+          changeSummary.priceChanges.push({
+            name,
+            url: productUrl,
+            fromCents: previous.priceCents,
+            toCents: priceCents,
+          });
+        }
+        if (changedFields.includes('availability')) {
+          changeSummary.availabilityChanges.push({
+            name,
+            url: productUrl,
+            from: previous.availability,
+            to: availability,
+          });
+        }
+      }
+
+      // --- images ---------------------------------------------------------
+      for (const [index, image] of extracted.images.slice(0, 12).entries()) {
+        await db.productImage
+          .upsert({
+            where: { productId_sourceUrl: { productId: product.id, sourceUrl: image.url } },
+            create: {
+              productId: product.id,
+              sourceUrl: image.url,
+              altText: image.altText ?? null,
+              isPrimary: index === 0,
+              position: index,
+            },
+            update: { altText: image.altText ?? null, position: index },
+          })
+          .catch(() => undefined); // A malformed image URL must not fail the scan.
+      }
+
+      // --- product facts ---------------------------------------------------
+      const productFacts: PendingFact[] = [];
+      const push = (fact: PendingFact | null) => {
+        if (fact) productFacts.push(fact);
+      };
+
+      push(factFrom('product.name', extracted.name, productUrl));
+      push(factFrom('product.description', extracted.description, productUrl));
+      push(factFrom('product.sku', extracted.sku, productUrl));
+      push(factFrom('product.brand', extracted.brand, productUrl));
+      push(factFrom('product.category', extracted.category, productUrl));
+      if (extracted.priceCents) {
+        push(
+          factFrom(
+            'product.price',
+            {
+              value: `${(extracted.priceCents.value / 100).toFixed(2)} ${currency}`,
+              method: extracted.priceCents.method,
+              confidence: extracted.priceCents.confidence,
+              ...(extracted.priceCents.excerpt === undefined
+                ? {}
+                : { excerpt: extracted.priceCents.excerpt }),
+            },
+            productUrl,
+          ),
+        );
+      }
+      if (extracted.availability) {
+        push(
+          factFrom(
+            'product.availability',
+            {
+              value: extracted.availability.value,
+              method: extracted.availability.method,
+              confidence: extracted.availability.confidence,
+            },
+            productUrl,
+          ),
+        );
+      }
+      for (const offer of extracted.statedOffers) {
+        productFacts.push({
+          key: `offer.${offer.kind}`,
+          value: offer.sourceText,
+          sourceUrl: productUrl,
+          sourceExcerpt: offer.sourceText,
+          // An offer is only ever recorded because the page literally said it.
+          method: 'TEXT_PATTERN',
+          confidence: 0.6,
         });
       }
-      if (changedFields.includes('availability')) {
-        changeSummary.availabilityChanges.push({
-          name,
-          url: productUrl,
-          from: previous.availability,
-          to: availability,
+      for (const cta of extracted.callsToAction) {
+        productFacts.push({
+          key: 'cta',
+          value: cta,
+          sourceUrl: productUrl,
+          sourceExcerpt: cta,
+          method: 'HTML',
+          confidence: 0.7,
         });
       }
-    }
 
-    // --- images ---------------------------------------------------------
-    for (const [index, image] of extracted.images.slice(0, 12).entries()) {
-      await db.productImage
-        .upsert({
-          where: { productId_sourceUrl: { productId: product.id, sourceUrl: image.url } },
-          create: {
-            productId: product.id,
-            sourceUrl: image.url,
-            altText: image.altText ?? null,
-            isPrimary: index === 0,
-            position: index,
-          },
-          update: { altText: image.altText ?? null, position: index },
-        })
-        .catch(() => undefined); // A malformed image URL must not fail the scan.
+      factsExtracted += await writeProductFacts(product.id, scanRunId, productFacts, db);
     }
-
-    // --- product facts ---------------------------------------------------
-    const productFacts: PendingFact[] = [];
-    const push = (fact: PendingFact | null) => {
-      if (fact) productFacts.push(fact);
-    };
-
-    push(factFrom('product.name', extracted.name, productUrl));
-    push(factFrom('product.description', extracted.description, productUrl));
-    push(factFrom('product.sku', extracted.sku, productUrl));
-    push(factFrom('product.brand', extracted.brand, productUrl));
-    push(factFrom('product.category', extracted.category, productUrl));
-    if (extracted.priceCents) {
-      push(
-        factFrom(
-          'product.price',
-          {
-            value: `${(extracted.priceCents.value / 100).toFixed(2)} ${currency}`,
-            method: extracted.priceCents.method,
-            confidence: extracted.priceCents.confidence,
-            ...(extracted.priceCents.excerpt === undefined
-              ? {}
-              : { excerpt: extracted.priceCents.excerpt }),
-          },
-          productUrl,
-        ),
-      );
-    }
-    if (extracted.availability) {
-      push(
-        factFrom(
-          'product.availability',
-          {
-            value: extracted.availability.value,
-            method: extracted.availability.method,
-            confidence: extracted.availability.confidence,
-          },
-          productUrl,
-        ),
-      );
-    }
-    for (const offer of extracted.statedOffers) {
-      productFacts.push({
-        key: `offer.${offer.kind}`,
-        value: offer.sourceText,
-        sourceUrl: productUrl,
-        sourceExcerpt: offer.sourceText,
-        // An offer is only ever recorded because the page literally said it.
-        method: 'TEXT_PATTERN',
-        confidence: 0.6,
-      });
-    }
-    for (const cta of extracted.callsToAction) {
-      productFacts.push({
-        key: 'cta',
-        value: cta,
-        sourceUrl: productUrl,
-        sourceExcerpt: cta,
-        method: 'HTML',
-        confidence: 0.7,
-      });
-    }
-
-    factsExtracted += await writeProductFacts(product.id, scanRunId, productFacts, db);
   }
 
   // --- products that disappeared ----------------------------------------

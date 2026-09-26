@@ -71,8 +71,8 @@ describe('crawling a site end to end', () => {
   });
 
   it('finds every product page', () => {
-    const products = crawl.pages.filter((page) => page.extraction.product !== null);
-    const names = products.map((page) => String(page.extraction.product?.name?.value));
+    const products = crawl.pages.filter((page) => page.extraction.products.length > 0);
+    const names = products.map((page) => String(page.extraction.products[0]?.name?.value));
 
     expect(names).toContain('Sourdough Starter');
     expect(names).toContain('Rye Flour 1kg');
@@ -82,8 +82,11 @@ describe('crawling a site end to end', () => {
   it('extracts prices correctly across all three markup styles', () => {
     const byName = new Map(
       crawl.pages
-        .filter((page) => page.extraction.product)
-        .map((page) => [String(page.extraction.product!.name?.value), page.extraction.product!]),
+        .filter((page) => page.extraction.products.length > 0)
+        .map((page) => [
+          String(page.extraction.products[0]!.name?.value),
+          page.extraction.products[0]!,
+        ]),
     );
 
     expect(byName.get('Sourdough Starter')?.priceCents?.value).toBe(1999); // JSON-LD
@@ -93,9 +96,9 @@ describe('crawling a site end to end', () => {
 
   it('reads availability, including out of stock', () => {
     const banneton = crawl.pages.find(
-      (page) => page.extraction.product?.name?.value === 'Banneton Proofing Basket',
+      (page) => page.extraction.products[0]?.name?.value === 'Banneton Proofing Basket',
     );
-    expect(banneton?.extraction.product?.availability?.value).toBe('OUT_OF_STOCK');
+    expect(banneton?.extraction.products[0]?.availability?.value).toBe('OUT_OF_STOCK');
   });
 
   it('extracts business contact details from structured data', () => {
@@ -155,35 +158,64 @@ describe('crawling a site end to end', () => {
 describe('product discovery across awkward real-world pages', () => {
   const pageFor = (path: string) => crawl.pages.find((page) => page.finalUrl.endsWith(path));
 
+  describe('a shop whose products all live on one page', () => {
+    /*
+     * The fixture's /packs page, reached through the sitemap rather than the
+     * nav. This is the shape that returned nothing at all: three pack sizes in
+     * one section, no structured data, and the extractor stopping at one product
+     * per page.
+     */
+    const packsPage = () => pageFor('/packs');
+
+    it('finds every pack, not one of them', () => {
+      expect(packsPage()?.extraction.products.map((p) => p.name?.value)).toEqual([
+        'Single',
+        '3-Pack',
+        'Full Case',
+      ]);
+    });
+
+    it('prices each pack from its own card', () => {
+      expect(packsPage()?.extraction.products.map((p) => p.priceCents?.value)).toEqual([
+        1500, 3900, 13200,
+      ]);
+    });
+
+    it('does not turn the cart total into a free product', () => {
+      const prices = packsPage()?.extraction.products.map((p) => p.priceCents?.value) ?? [];
+      expect(prices).not.toContain(0);
+    });
+  });
+
   it('finds no product on a category listing', () => {
     const listing = pageFor('/collections/flours');
-    expect(listing?.extraction.product).toBeNull();
+    expect(listing?.extraction.products).toHaveLength(0);
     expect(listing?.extraction.pageType).toBe('COLLECTION');
   });
 
   it('finds a product on a page whose only price is a labelled element', () => {
     const plain = pageFor('/shop/linen-couche');
 
-    expect(plain?.extraction.product?.name?.value).toBe('Linen couche');
-    expect(plain?.extraction.product?.priceCents?.value).toBe(1850);
-    expect(plain?.extraction.product?.currency?.value).toBe('GBP');
+    expect(plain?.extraction.products[0]?.name?.value).toBe('Linen couche');
+    expect(plain?.extraction.products[0]?.priceCents?.value).toBe(1850);
+    expect(plain?.extraction.products[0]?.currency?.value).toBe('GBP');
   });
 
   it('reads an itemprop name from the link text', () => {
     const linked = pageFor('/products/linked-name');
 
-    expect(linked?.extraction.product?.name?.value).toBe('Proving cloth');
-    expect(linked?.extraction.product?.priceCents?.value).toBe(1200);
+    expect(linked?.extraction.products[0]?.name?.value).toBe('Proving cloth');
+    expect(linked?.extraction.products[0]?.priceCents?.value).toBe(1200);
   });
 
   it('does not read product data out of a non-Product itemscope', () => {
     const plans = pageFor('/plans');
-    expect(plans?.extraction.product?.name?.method).not.toBe('MICRODATA');
+    expect(plans?.extraction.products[0]?.name?.method).not.toBe('MICRODATA');
   });
 
   it('never names a product after a page heading that is a category', () => {
     const names = crawl.pages
-      .map((page) => page.extraction.product?.name?.value)
+      .map((page) => page.extraction.products[0]?.name?.value)
       .filter((name): name is string => typeof name === 'string');
 
     expect(names).not.toContain('Flours');

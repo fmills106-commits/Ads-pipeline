@@ -161,9 +161,10 @@ describe('rescanning and change detection', () => {
     // Simulate the merchant raising a price between scans.
     const crawled = await crawl();
     for (const page of crawled.pages) {
-      const product = page.extraction.product;
-      if (product?.name?.value === 'Sourdough Starter' && product.priceCents) {
-        product.priceCents.value = 2499;
+      for (const product of page.extraction.products) {
+        if (product.name?.value === 'Sourdough Starter' && product.priceCents) {
+          product.priceCents.value = 2499;
+        }
       }
     }
 
@@ -201,7 +202,7 @@ describe('rescanning and change detection', () => {
     // A rescan that no longer finds one of the products.
     const crawled = await crawl();
     crawled.pages = crawled.pages.filter(
-      (page) => page.extraction.product?.name?.value !== 'Banneton Proofing Basket',
+      (page) => page.extraction.products[0]?.name?.value !== 'Banneton Proofing Basket',
     );
 
     const second = await prisma.scanRun.create({
@@ -436,5 +437,51 @@ describe('a scan of a site that cannot be read', () => {
 
     const status = await getScanStatus(context);
     expect(status?.phase).toBe('failed');
+  });
+});
+
+describe('a shop whose products all live on one page', () => {
+  /*
+   * The half of this that extraction cannot prove. Products are identified by
+   * the URL they were found at, so three products on one page collide on that
+   * URL unless each has an identity of its own — and the failure is silent:
+   * two of the three simply never appear.
+   */
+  it('stores each product on the page separately', async () => {
+    const context = await newBusiness();
+    const scanRun = await prisma.scanRun.create({
+      data: { businessId: context.businessId, requestedUrl: site.origin, status: 'RUNNING' },
+    });
+
+    await persistScan(context, scanRun.id, await crawl());
+
+    const packs = await prisma.product.findMany({
+      where: { businessId: context.businessId, productUrl: { contains: '/packs' } },
+      orderBy: { priceCents: 'asc' },
+    });
+
+    expect(packs.map((p) => p.name)).toEqual(['Single', '3-Pack', 'Full Case']);
+    expect(packs.map((p) => p.priceCents)).toEqual([1500, 3900, 13200]);
+    // Each keeps the merchant's own identifier, so a renamed pack keeps its
+    // price history instead of arriving as a new product.
+    expect(packs.map((p) => p.sku)).toEqual(['single', 'three', 'case12']);
+    expect(new Set(packs.map((p) => p.productUrl)).size).toBe(3);
+  });
+
+  it('keeps a single-product page identified by its bare URL', async () => {
+    // Anything recorded before several-per-page existed must keep its
+    // identity, or every product's price history restarts on the next scan.
+    const context = await newBusiness();
+    const scanRun = await prisma.scanRun.create({
+      data: { businessId: context.businessId, requestedUrl: site.origin, status: 'RUNNING' },
+    });
+
+    await persistScan(context, scanRun.id, await crawl());
+
+    const starter = await prisma.product.findFirstOrThrow({
+      where: { businessId: context.businessId, name: 'Sourdough Starter' },
+    });
+    expect(starter.productUrl).toBe(`${site.origin}/products/sourdough-starter`);
+    expect(starter.productUrl).not.toContain('#');
   });
 });

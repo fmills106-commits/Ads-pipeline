@@ -390,3 +390,57 @@ Every fix is covered by tests built from the real markup that broke it —
 17 new assertions across `scanner-extraction.test.ts` and
 `scanner-crawl.test.ts`, plus four fixture pages carrying the shapes that
 caused the trouble.
+
+## Several products on one page
+
+Added after the first real storefront: a one-page shop selling four pack sizes
+from a single section of its front page. Every product it sold was invisible,
+for two independent reasons.
+
+`extractFromHtml` returned at most one product per page, and `persistScan`
+identified a product by the URL it was found at — so even had extraction found
+four, three would have collided on that URL and silently vanished. Both are
+fixed: `PageExtraction.products` is a list, and a product on a page that offers
+several carries a short identifier from the page (its element `id`, else its
+`data-sku`, else a slug of its name) which becomes a URL fragment. A page about
+one product keeps its bare URL, so nothing recorded earlier loses its price
+history.
+
+Extraction now tries three paths and uses the first that yields anything, so a
+product page's "you may also like" strip never reports its neighbours as its
+own products:
+
+1. **Several declared products** — two or more `schema.org/Product` nodes, read
+   one per node rather than merged. Merging is what turned a carousel into a
+   single product called "Home" priced at $1,187.98.
+2. **One product** — the original path, unchanged, guards and all.
+3. **A repeated group of priced offers** — no structured data, but sibling
+   elements of one shape each naming one thing and one price.
+
+Path 3 is the loosest, so it is the most constrained. The hard part is not
+finding the four packs; it is finding them without also "finding" products on a
+category listing, whose markup is the same shape — repeated cards, each with a
+name, a price and an add-to-basket button. The difference is where the checkout
+is: **a listing card links to the product's own page, a pack card has nowhere
+to send you.** A card containing a link out is declined, which costs nothing
+because that product is read properly, with its full detail, from the page it
+links to. A cart, a comparison table in an article, and a single priced banner
+are all refused too, and a price of zero is never a product's price.
+
+Everything from path 3 is recorded as method `HTML` — the lowest trust tier
+above guessing from prose — so the provenance stays honest about having been
+inferred from layout rather than declared.
+
+### A pre-existing bug this uncovered
+
+The new category-listing test failed on the _old_ code path, not the new one:
+the listing was stored as a single product named "Flours" at £7.90. The
+`looksLikeListing` guard counts add-to-basket phrases, and its pattern began
+with `\b` — but `extractVisibleText` joins text nodes with no separator, so the
+page reads `£7.90Add to basket` and there is no word boundary between `0` and
+`A`. It found none of the three buttons.
+
+The fix is to the pattern, not to the text. Putting spaces between elements
+would fix the boundary and break something worse: a price split across
+elements, `<span>$</span><span>15</span>`, is ordinary storefront markup and
+would become "$ 15" and stop parsing as money.

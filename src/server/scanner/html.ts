@@ -69,6 +69,20 @@ export interface ExtractedProduct {
   images: Array<{ url: string; altText?: string; isPrimary: boolean }>;
   statedOffers: StatedOffer[];
   callsToAction: string[];
+  /**
+   * Distinguishes several products found on one page.
+   *
+   * A page that is about a single product leaves this undefined, and that
+   * product is identified by the page's own URL — the behaviour since Phase 2,
+   * and what keeps a product's price history attached to it across scans. A
+   * page that offers several (a one-page shop, a pricing grid) needs something
+   * more specific, so each one carries a short stable identifier taken from the
+   * page: the element's `id`, else its `data-sku`, else a slug of its name.
+   *
+   * It is an identifier, not a promise of a working anchor link: the element it
+   * names may have no `id` for a browser to scroll to.
+   */
+  pageAnchor?: string;
 }
 
 export interface ExtractedBusiness {
@@ -95,8 +109,15 @@ export interface PageExtraction {
   };
   links: string[];
   business: ExtractedBusiness;
-  /** Present when the page looks like a product page. */
-  product: ExtractedProduct | null;
+  /**
+   * Every product this page offers, in the order they appear.
+   *
+   * Usually empty or one. A one-page shop and a pricing grid put several on a
+   * single page, which was invisible to this extractor until a real
+   * single-page storefront — four pack sizes in one section on the front page
+   * — came back with nothing at all.
+   */
+  products: ExtractedProduct[];
   /** Advisory: text on the page resembling an instruction to an AI. */
   injectionSignals: string[];
 }
@@ -131,9 +152,15 @@ export function extractFromHtml(html: string, pageUrl: string): PageExtraction {
   const links = extractLinks(root, pageUrl);
 
   const business = extractBusiness({ root, jsonLd, openGraph, text, pageUrl });
-  const product = extractProduct({ root, jsonLd, openGraph, text, pageUrl });
+  const products = extractProducts({ root, jsonLd, openGraph, text, pageUrl });
 
-  const pageType = classifyPageType({ pageUrl, title, text, product, jsonLd });
+  const pageType = classifyPageType({
+    pageUrl,
+    title,
+    text,
+    product: products[0] ?? null,
+    jsonLd,
+  });
 
   return {
     title,
@@ -144,7 +171,7 @@ export function extractFromHtml(html: string, pageUrl: string): PageExtraction {
     structuredData: { jsonLd, openGraph, microdata },
     links,
     business,
-    product,
+    products,
     injectionSignals: scanForInjectionSignals(`${title ?? ''}\n${text}`).signals,
   };
 }
@@ -554,6 +581,44 @@ function normaliseAvailability(raw: string | undefined): Availability | undefine
   return undefined;
 }
 
+interface ProductExtractionInput {
+  root: HTMLElement;
+  jsonLd: unknown[];
+  openGraph: Record<string, string>;
+  text: string;
+  pageUrl: string;
+}
+
+/**
+ * Every product on the page.
+ *
+ * Three paths, tried in order of how explicitly the merchant declared what
+ * they sell. Only the first one that yields anything is used, so a product page
+ * with a "you may also like" strip does not report its neighbours as its own
+ * products.
+ *
+ *  1. **Several declared products.** Two or more `schema.org/Product` nodes in
+ *     JSON-LD, or two or more Product itemscopes in microdata. Each becomes a
+ *     product in its own right.
+ *  2. **One product.** The original path, unchanged: everything on the page
+ *     merged into a single product, with the guards that stop a category page
+ *     or a homepage becoming one. A single declared node still goes through
+ *     here, because merging JSON-LD with microdata and OpenGraph produces a
+ *     better-populated product than any one source alone.
+ *  3. **A repeated group of priced offers.** No structured data at all, but a
+ *     row of sibling elements each carrying one price and a name — a pricing
+ *     grid, or the "pick your pack" section of a one-page shop.
+ */
+function extractProducts(input: ProductExtractionInput): ExtractedProduct[] {
+  const declared = extractDeclaredProducts(input);
+  if (declared.length > 1) return declared;
+
+  const single = extractProduct(input);
+  if (single) return [single];
+
+  return extractOfferGroup(input);
+}
+
 function extractProduct(input: {
   root: HTMLElement;
   jsonLd: unknown[];
@@ -585,7 +650,7 @@ function extractProduct(input: {
    * pages, so its product pages had no cart signal at all and yielded nothing.
    */
   const circumstantial =
-    /\badd to (?:cart|bag|basket)\b/i.test(text) ||
+    ADD_TO_CART.test(text) ||
     root.querySelector('[itemprop="price" i]') !== null ||
     root.querySelector('[class*="price" i]') !== null;
 
@@ -832,6 +897,383 @@ function extractProduct(input: {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Several products on one page
+// ---------------------------------------------------------------------------
+
+/** How many products one page may contribute. A guard against a runaway list. */
+const MAX_PRODUCTS_PER_PAGE = 24;
+
+/**
+ * One product per declared node.
+ *
+ * Trust comes from the merchant having written the markup, so there is no
+ * homepage guard here and no corroboration required: a page that declares four
+ * Products is a page with four products, wherever it sits on the site.
+ *
+ * Fields are read only from within each node, never merged across them —
+ * merging is what turned a carousel of microdata into a single product called
+ * "Home" priced at $1,187.98.
+ */
+function extractDeclaredProducts(input: ProductExtractionInput): ExtractedProduct[] {
+  const { root, jsonLd } = input;
+  const products: ExtractedProduct[] = [];
+
+  for (const node of findJsonLdOfType(jsonLd, ['Product', 'ProductGroup'])) {
+    const product = productFromJsonLdNode(node);
+    if (product) products.push(product);
+  }
+  if (products.length > 1) return products.slice(0, MAX_PRODUCTS_PER_PAGE);
+
+  // Microdata, scoped to each itemscope rather than the whole document.
+  const scopes = root.querySelectorAll('[itemtype*="schema.org/Product" i]');
+  if (scopes.length > 1) {
+    const fromMicrodata: ExtractedProduct[] = [];
+    for (const scope of scopes) {
+      const product = productFromMicrodataScope(scope);
+      if (product) fromMicrodata.push(product);
+    }
+    if (fromMicrodata.length > 1) return fromMicrodata.slice(0, MAX_PRODUCTS_PER_PAGE);
+  }
+
+  return products;
+}
+
+function productFromJsonLdNode(node: Record<string, unknown>): ExtractedProduct | null {
+  const name = firstString(node['name']);
+  if (!name) return null;
+
+  const product: ExtractedProduct = {
+    name: value(name, 'JSON_LD'),
+    images: [],
+    statedOffers: [],
+    callsToAction: [],
+  };
+
+  const description = firstString(node['description']);
+  if (description) product.description = value(description, 'JSON_LD');
+
+  const sku = firstString(node['sku'] ?? node['mpn'] ?? node['productID'] ?? node['gtin13']);
+  if (sku) {
+    product.sku = value(sku, 'JSON_LD');
+    product.pageAnchor = slugFor(sku);
+  }
+  product.pageAnchor ??= slugFor(name);
+
+  const brand = firstString(node['brand']);
+  if (brand) product.brand = value(brand, 'JSON_LD');
+
+  const category = firstString(node['category']);
+  if (category) product.category = value(category, 'JSON_LD');
+
+  for (const offer of offersOf(node)) {
+    const price = firstString(offer['price'] ?? offer['lowPrice']);
+    const currency = firstString(offer['priceCurrency']);
+    if (price) {
+      const parsed = parsePrice(price, currency);
+      if (parsed) product.priceCents = value(parsed.cents, 'JSON_LD');
+    }
+    if (currency) product.currency = value(currency.toUpperCase(), 'JSON_LD');
+
+    const availability = firstString(offer['availability']);
+    const normalised = availability ? normaliseAvailability(availability) : undefined;
+    if (normalised) product.availability = value(normalised, 'JSON_LD');
+  }
+
+  return product;
+}
+
+function productFromMicrodataScope(scope: HTMLElement): ExtractedProduct | null {
+  const fields = extractProductMicrodata(scope);
+  const name = fields['name'];
+  if (!name) return null;
+
+  const product: ExtractedProduct = {
+    name: value(name, 'MICRODATA'),
+    images: [],
+    statedOffers: [],
+    callsToAction: [],
+  };
+
+  const description = fields['description'];
+  if (description) product.description = value(description, 'MICRODATA');
+
+  const sku = fields['sku'];
+  if (sku) product.sku = value(sku, 'MICRODATA');
+
+  const currency = fields['priceCurrency'];
+  if (currency) product.currency = value(currency.toUpperCase(), 'MICRODATA');
+
+  const price = fields['price'];
+  if (price) {
+    const parsed = parsePrice(price, currency ?? null);
+    if (parsed) product.priceCents = value(parsed.cents, 'MICRODATA');
+  }
+
+  const availability = fields['availability'];
+  const normalised = availability ? normaliseAvailability(availability) : undefined;
+  if (normalised) product.availability = value(normalised, 'MICRODATA');
+
+  product.pageAnchor = scope.getAttribute('id') ?? slugFor(sku ?? name);
+
+  return product;
+}
+
+/*
+ * Inside a card, these describe something other than the price of the thing
+ * itself, and a card that mentions both would otherwise be priced by whichever
+ * number came first. Smooshery's single pack reads "$15 … + $4.99 on its own";
+ * the product costs $15.
+ */
+const NOT_THE_PRICE = /ship|deliver|postage|tax|vat|was|rrp|instead|save|compare|from\b/i;
+
+/** A price, and the element it was written in, for deciding what it means. */
+const PRICEY = /[$£€¥]\s?\d[\d.,]*|\d[\d.,]*\s?(?:USD|EUR|GBP|AUD|CAD)/;
+
+/**
+ * A repeated group of priced offers, for a page with no structured data.
+ *
+ * This is the loosest path in the extractor, so it is the most constrained. It
+ * looks for what a pricing grid actually is — sibling elements of the same
+ * shape, each naming one thing and one price — rather than for prices on a
+ * page, which is the mistake that produced a product called "Home".
+ *
+ * The structure is the evidence. A carousel of unrelated prices does not
+ * repeat a class signature with one price per item; a "pick your pack" section
+ * does. Requiring at least two matching siblings, and exactly one price inside
+ * each after shipping and comparison prices are set aside, is what separates
+ * them.
+ *
+ * Everything here is recorded as method HTML, the lowest trust tier above
+ * guessing from prose, so downstream code and the owner can both see that it
+ * was inferred from layout rather than declared.
+ */
+function extractOfferGroup(input: ProductExtractionInput): ExtractedProduct[] {
+  const { root, text } = input;
+
+  // Something on the page must be for sale. Without this, a comparison table
+  // in a blog post becomes a product line.
+  const purchaseIntent =
+    ADD_TO_CART.test(text) || /\bbuy now\b|\bcheckout\b|\border now\b/i.test(text);
+  if (!purchaseIntent) return [];
+
+  let bestGroup: ExtractedProduct[] = [];
+
+  for (const container of root.querySelectorAll('*')) {
+    const children = container.childNodes.filter(isElement);
+    if (children.length < 2) continue;
+
+    // Same shape: the first class token, or the tag name when unclassed.
+    const bySignature = new Map<string, HTMLElement[]>();
+    for (const child of children) {
+      const signature = signatureOf(child);
+      const group = bySignature.get(signature) ?? [];
+      group.push(child);
+      bySignature.set(signature, group);
+    }
+
+    for (const siblings of bySignature.values()) {
+      if (siblings.length < 2) continue;
+      if (isInsideCart(siblings[0])) continue;
+
+      const products: ExtractedProduct[] = [];
+      for (const card of siblings) {
+        const product = productFromCard(card);
+        if (product) products.push(product);
+      }
+
+      // Every sibling of the same shape should be a card. If only some are,
+      // the "group" is a coincidence of class names rather than a grid.
+      if (products.length < 2 || products.length < siblings.length - 1) continue;
+      if (products.length > bestGroup.length) bestGroup = products;
+    }
+  }
+
+  return dedupeByName(bestGroup).slice(0, MAX_PRODUCTS_PER_PAGE);
+}
+
+/**
+ * Whether this card sells something here, or merely points at it.
+ *
+ * This is the whole difference between a one-page shop and a category listing,
+ * and the two are otherwise identical in shape: repeated siblings, each with a
+ * name, a price and an add-to-basket button. A category card wraps its name in
+ * a link to the product's own page; a pack card has nowhere to send you,
+ * because the checkout is right there.
+ *
+ * Getting this wrong in the permissive direction is what a collection page in
+ * the test suite caught immediately: four products invented on a page whose
+ * four real products were about to be read properly, with full detail, from
+ * their own pages.
+ *
+ * So a card that links out is declined. It costs nothing — the product is
+ * extracted from the page it links to — and it means this path only ever fires
+ * where there is no other page to get it from.
+ */
+function sellsInPlace(card: HTMLElement): boolean {
+  for (const link of card.querySelectorAll('a')) {
+    const href = (link.getAttribute('href') ?? '').trim();
+    if (href && !href.startsWith('#')) return false;
+  }
+
+  if (card.getAttribute('data-sku') ?? card.getAttribute('data-add')) return true;
+
+  for (const control of card.querySelectorAll('button, input[type="submit"]')) {
+    const label = `${control.textContent ?? ''} ${control.getAttribute('value') ?? ''}`;
+    if (ADD_TO_CART.test(label) || /\bbuy\b|\bchoose\b|\bselect\b|\border\b/i.test(label)) {
+      return true;
+    }
+    if (control.getAttribute('data-add') ?? control.getAttribute('data-sku')) return true;
+  }
+
+  return false;
+}
+
+function productFromCard(card: HTMLElement): ExtractedProduct | null {
+  if (!sellsInPlace(card)) return null;
+
+  let price: { cents: number; currency: string | null; excerpt: string } | null = null;
+  let name: string | null = null;
+
+  for (const node of card.querySelectorAll('*')) {
+    const own = ownText(node);
+    if (!own) continue;
+
+    const classes = `${node.getAttribute('class') ?? ''} ${own}`;
+
+    if (PRICEY.test(own)) {
+      if (price || NOT_THE_PRICE.test(classes)) continue;
+      const parsed = parsePrice(own, null);
+      // A price of nothing is a cart total, a placeholder or a free shipping
+      // line — never the price of a product somebody is selling.
+      if (parsed && parsed.cents > 0) {
+        price = { cents: parsed.cents, currency: parsed.currency, excerpt: own };
+      }
+      continue;
+    }
+
+    if (name) continue;
+    if (!isPlausibleName(own)) continue;
+    // Prefer something the page labelled as a name or a heading; otherwise the
+    // first short line that is not a price will do.
+    if (/name|title/i.test(node.getAttribute('class') ?? '') || /^h[1-6]$/.test(node.rawTagName)) {
+      name = own;
+    } else {
+      name ??= own;
+    }
+  }
+
+  if (!price || !name) return null;
+
+  const product: ExtractedProduct = {
+    name: value(name, 'HTML', name),
+    priceCents: value(price.cents, 'HTML', price.excerpt),
+    images: [],
+    statedOffers: [],
+    callsToAction: [],
+  };
+  if (price.currency) product.currency = value(price.currency, 'HTML');
+
+  /*
+   * The identifier is usually on the control rather than the card — it is
+   * there for the page's own cart script, which needs it on the thing you
+   * click. It is worth finding: it is the merchant's own name for the item, so
+   * it survives a wording change to the label that a slug of the name would
+   * not, and a product keeps its price history across that change.
+   */
+  const sku = skuWithin(card);
+  if (sku) product.sku = value(sku, 'HTML');
+
+  product.pageAnchor = card.getAttribute('id') ?? slugFor(sku ?? name);
+
+  return product;
+}
+
+const SKU_ATTRIBUTES = ['data-sku', 'data-add', 'data-product-id', 'data-variant-id'] as const;
+
+/** The merchant's own identifier for this item, from the card or its controls. */
+function skuWithin(card: HTMLElement): string | null {
+  for (const attribute of SKU_ATTRIBUTES) {
+    const own = card.getAttribute(attribute)?.trim();
+    if (own) return own.slice(0, 100);
+  }
+  for (const node of card.querySelectorAll('*')) {
+    for (const attribute of SKU_ATTRIBUTES) {
+      const found = node.getAttribute(attribute)?.trim();
+      if (found) return found.slice(0, 100);
+    }
+  }
+  return null;
+}
+
+/** A name, not a sentence, a price or a label like "Most popular". */
+function isPlausibleName(candidate: string): boolean {
+  if (candidate.length < 2 || candidate.length > 80) return false;
+  if (PRICEY.test(candidate)) return false;
+  if (NOT_THE_PRICE.test(candidate)) return false;
+  if (/^(?:most popular|best value|new|sale|sold out|free)$/i.test(candidate)) return false;
+  // A sentence is a description, not a name.
+  return candidate.split(/\s+/).length <= 8 && !/[.!?]\s/.test(candidate);
+}
+
+/** Text belonging to this element, not to its descendants. */
+function ownText(node: HTMLElement): string | null {
+  const own = node.childNodes
+    .filter((child) => !isElement(child))
+    .map((child) => child.rawText)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return own.length > 0 ? own : null;
+}
+
+const isElement = (node: { nodeType: number }): node is HTMLElement => node.nodeType === 1;
+
+function signatureOf(element: HTMLElement): string {
+  const first = (element.getAttribute('class') ?? '').trim().split(/\s+/)[0];
+  return first ? `.${first}` : element.rawTagName;
+}
+
+/** A cart, an order summary or a checkout panel is not a product listing. */
+function isInsideCart(element: HTMLElement | undefined): boolean {
+  let node: HTMLElement | null | undefined = element;
+  for (let depth = 0; node && depth < 12; depth += 1) {
+    const marker = `${node.getAttribute('class') ?? ''} ${node.getAttribute('id') ?? ''}`;
+    if (/cart|basket|checkout|summary|subtotal|minicart/i.test(marker)) return true;
+    node = node.parentNode as HTMLElement | null;
+  }
+  return false;
+}
+
+function dedupeByName(products: ExtractedProduct[]): ExtractedProduct[] {
+  const seen = new Set<string>();
+  return products.filter((product) => {
+    const key = (product.name?.value ?? '').toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** A node's `offers`, whether it holds one object or an array of them. */
+function offersOf(node: Record<string, unknown>): Array<Record<string, unknown>> {
+  const raw = node['offers'];
+  return (Array.isArray(raw) ? raw : [raw]).filter(
+    (offer): offer is Record<string, unknown> => offer !== null && typeof offer === 'object',
+  );
+}
+
+/** A short, stable, URL-safe identifier. */
+function slugFor(raw: string): string {
+  return (
+    raw
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 60) || 'item'
+  );
+}
+
 /** Whether a URL is a site's front page. */
 function isSiteRoot(pageUrl: string): boolean {
   try {
@@ -841,6 +1283,26 @@ function isSiteRoot(pageUrl: string): boolean {
     return false;
   }
 }
+
+/**
+ * "Add to basket", however the page's markup ran it together with what
+ * precedes it.
+ *
+ * No leading `\b`, deliberately. `extractVisibleText` joins the document's
+ * text nodes with no separator, so a card whose price sits in one element and
+ * whose button sits in the next reads `£7.90Add to basket` — and a word
+ * boundary between `0` and `A` does not exist. With `\b` this pattern found
+ * none of the three add-to-basket buttons on a category listing, the listing
+ * therefore did not look like a listing, and the page was stored as a single
+ * product named after its heading: "Flours", priced at £7.90.
+ *
+ * Putting spaces between elements in the visible text would fix the boundary
+ * and break something worse: a price split across elements —
+ * `<span>$</span><span>15</span>` is ordinary storefront markup — would become
+ * "$ 15" and stop parsing as money.
+ */
+const ADD_TO_CART = /add to (?:cart|bag|basket)\b/i;
+const ADD_TO_CART_GLOBAL = /add to (?:cart|bag|basket)\b/gi;
 
 /** Any currency-ish amount, for counting rather than parsing. */
 const PRICE_SHAPED = /(?:[$£€¥]\s?\d[\d.,]*|\d[\d.,]*\s?(?:USD|EUR|GBP|AUD|CAD))/g;
@@ -859,7 +1321,7 @@ function looksLikeListing(text: string): boolean {
   );
   if (distinctPrices.size > 3) return true;
 
-  return (text.match(/\badd to (?:cart|bag|basket)\b/gi) ?? []).length > 2;
+  return (text.match(ADD_TO_CART_GLOBAL) ?? []).length > 2;
 }
 
 // ---------------------------------------------------------------------------
