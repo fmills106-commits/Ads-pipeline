@@ -16,6 +16,7 @@ import { isZeroCostMode } from '@/lib/env';
 import { getScanStatus } from '@/server/scanner/service';
 import { PauseControl } from './pause-control';
 import { ActivityFeed } from './activity-feed';
+import { AttentionBanner } from './attention-banner';
 
 export const metadata: Metadata = { title: 'Dashboard' };
 
@@ -142,17 +143,7 @@ export default async function DashboardPage() {
         </div>
       ) : null}
 
-      {attention > 0 ? (
-        <div className="mb-5 flex items-start gap-3 rounded-lg border border-status-pending/40 bg-status-pending/5 p-4">
-          <span aria-hidden="true">❓</span>
-          <p className="text-sm">
-            <strong>
-              {attention} {attention === 1 ? 'thing needs' : 'things need'} your input.
-            </strong>{' '}
-            <span className="text-ink-muted">See the activity below.</span>
-          </p>
-        </div>
-      ) : null}
+      {attention > 0 ? <AttentionBanner businessId={business.id} count={attention} /> : null}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat

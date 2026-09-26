@@ -26,7 +26,7 @@ const schema = z.discriminatedUnion('action', [
 ]);
 
 export const POST = route(
-  { schema, rateLimit: RATE_LIMITS.scan },
+  { schema, rateLimit: RATE_LIMITS.marketing },
   async ({ body, params, user }) => {
     const businessId = params['businessId'];
     if (typeof businessId !== 'string') throw validationError('businessId is required');

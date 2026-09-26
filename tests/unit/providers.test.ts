@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   listProviders,
+  NO_CEILINGS,
+  NO_PAID_PROVIDERS,
   registerProvider,
   resetRegistry,
   selectProvider,
@@ -41,7 +43,10 @@ const paidAI: ProviderDescriptor = {
   isConfigured: () => true,
 };
 
-const enabled = (...keys: string[]): EnabledPaidProviders => ({ has: (key) => keys.includes(key) });
+const enabled = (...keys: string[]): EnabledPaidProviders => ({
+  has: (key) => keys.includes(key),
+  ceilingsFor: () => NO_CEILINGS,
+});
 
 describe('provider selection', () => {
   beforeEach(() => {
@@ -130,7 +135,7 @@ describe('capability summary', () => {
   afterEach(resetProviders);
 
   it('labels the active provider free or paid, so the UI can never hide it', () => {
-    const summary = summariseCapability('AI', { has: () => false }, true);
+    const summary = summariseCapability('AI', NO_PAID_PROVIDERS, true);
 
     expect(summary.tier).toBe('LOCAL_FREE');
     expect(summary.activeLabel).toBe('Free AI');

@@ -48,11 +48,31 @@ export function listProviders(capability?: ProviderCapability): ProviderDescript
  * Passed in rather than read here so selection stays pure and testable, and so
  * a caller cannot forget that this is per-workspace.
  */
-export interface EnabledPaidProviders {
-  has: (key: ProviderKey) => boolean;
+export interface ProviderCeilings {
+  dailyCents: number | null;
+  monthlyCents: number | null;
 }
 
-export const NO_PAID_PROVIDERS: EnabledPaidProviders = { has: () => false };
+export interface EnabledPaidProviders {
+  has: (key: ProviderKey) => boolean;
+  /**
+   * The ceiling this workspace set for one provider, if any.
+   *
+   * Carried here rather than passed to each call because the caller does not
+   * know which implementation will be selected — that is decided inside
+   * `runProvider`. Every call site would otherwise have to load the settings
+   * and pass them through, and the one that forgot would spend without a cap
+   * and look identical to the ones that did not.
+   */
+  ceilingsFor: (key: ProviderKey) => ProviderCeilings;
+}
+
+export const NO_CEILINGS: ProviderCeilings = { dailyCents: null, monthlyCents: null };
+
+export const NO_PAID_PROVIDERS: EnabledPaidProviders = {
+  has: () => false,
+  ceilingsFor: () => NO_CEILINGS,
+};
 
 export interface SelectionContext {
   capability: ProviderCapability;

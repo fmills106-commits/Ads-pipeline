@@ -572,6 +572,28 @@ describe('the activity feed after things go wrong and then right', () => {
     expect((await recentActivity(context)).length).toBeGreaterThanOrEqual(2);
   });
 
+  it('lets the owner clear items nothing will ever resolve for them', async () => {
+    /*
+     * The case that kept a real dashboard stuck at "3 things need your input"
+     * after all three were dealt with: automatic resolution can only answer
+     * conditions some code notices ending, and these had no such moment.
+     */
+    const context = await newBusiness('Stuck At Three');
+    for (const message of ['One.', 'Two.', 'Three.']) {
+      await recordActivity(context, { kind: 'needsYourInput', message, needsAttention: true });
+    }
+    expect(await pendingAttentionCount(context)).toBe(3);
+
+    const resolved = await resolveAttention(context);
+
+    expect(resolved).toBe(3);
+    expect(await pendingAttentionCount(context)).toBe(0);
+    // Resolved, not deleted: they still happened.
+    expect((await recentActivity(context)).map((item) => item.message)).toEqual(
+      expect.arrayContaining(['One.', 'Two.', 'Three.']),
+    );
+  });
+
   it('writes one entry when the same thing is recorded twice in a moment', async () => {
     const context = await newBusiness('Double Clicker');
     const entry = {

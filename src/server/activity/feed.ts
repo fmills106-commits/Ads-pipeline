@@ -187,14 +187,25 @@ export async function pendingAttentionCount(
  */
 export async function resolveAttention(
   context: BusinessContext,
-  kinds: ActivityKind[],
+  /**
+   * Which kinds to answer. Omit for all of them, which is what the owner
+   * pressing "mark as handled" means.
+   *
+   * Automatic resolution names kinds because the code that knows a condition
+   * cleared only knows about its own. The owner needs no such restraint: they
+   * can see the list, and if they say it is dealt with, it is dealt with.
+   * Without that, an item flagged by something that never happens again stays
+   * on the dashboard forever — which is how the count got to three and stayed
+   * there after the problems behind it were fixed.
+   */
+  kinds?: ActivityKind[],
   db: Db = prisma,
 ): Promise<number> {
   try {
     const { count } = await db.activityEvent.updateMany({
       where: {
         businessId: context.businessId,
-        kind: { in: kinds },
+        ...(kinds ? { kind: { in: kinds } } : {}),
         needsAttention: true,
         resolvedAt: null,
       },

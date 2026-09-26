@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
 import Link from 'next/link';
 import type { ProviderCapability } from '@prisma/client';
 import { Card, PageHeader, cx } from '@/components/ui/primitives';
@@ -7,12 +8,16 @@ import { listWorkspacesForUser, requireWorkspaceContext } from '@/server/tenancy
 import { listBusinesses } from '@/server/business/service';
 import { summariseCapability } from '@/server/providers';
 import { loadEnabledPaidProviders } from '@/server/providers/run';
+import { listProviderSettings, paidSpendPossible, whyBlocked } from '@/server/providers/settings';
 import { costSummary } from '@/server/cost/ledger';
 import { AUTOMATION_CHOICES, GOAL_CHOICES } from '@/server/business/onboarding';
 import { formatBudget, formatCents } from '@/lib/budget';
 import { isZeroCostMode } from '@/lib/env';
+import { parseTheme, THEME_COOKIE } from '@/lib/theme';
 import { AdvancedSettings } from './advanced-settings';
 import { BusinessName } from './business-name';
+import { PaidProvider } from './paid-provider';
+import { ThemeSwitch } from './theme-switch';
 
 export const metadata: Metadata = { title: 'Settings' };
 
@@ -46,11 +51,15 @@ export default async function SettingsPage() {
   }
 
   const context = await requireWorkspaceContext(user, active.workspace.id);
-  const [businesses, enabledPaid, costs] = await Promise.all([
+  const [businesses, enabledPaid, costs, providerSettings] = await Promise.all([
     listBusinesses(context),
     loadEnabledPaidProviders(active.workspace.id),
     costSummary(active.workspace.id),
+    listProviderSettings(context),
   ]);
+
+  const settingsByKey = new Map(providerSettings.map((row) => [row.providerKey, row]));
+  const paidPossible = paidSpendPossible();
 
   const business = businesses[0];
   const capabilities = VISIBLE_CAPABILITIES.map((capability) =>
@@ -159,27 +168,42 @@ export default async function SettingsPage() {
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
                 Optional paid upgrades
               </h3>
-              <ul className="space-y-2 text-sm">
+              <p className="mb-3 text-sm text-ink-muted">
+                {paidPossible
+                  ? 'Off unless you switch one on. Each has its own daily limit, and the lower of that and this deployment’s limit applies.'
+                  : 'All off, and none of them can be switched on in this deployment’s current configuration. Each says what would have to change.'}
+              </p>
+              <ul className="space-y-4 text-sm">
                 {capabilities.flatMap((capability) =>
                   capability.paidAlternatives.map((alternative) => (
-                    <li key={alternative.key} className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="font-medium">{alternative.label}</p>
-                        <p className="text-ink-muted">{alternative.description}</p>
-                      </div>
-                      <span className="shrink-0 text-xs text-ink-muted">
-                        {alternative.enabled
-                          ? 'On'
-                          : alternative.configured
-                            ? 'Available, off'
-                            : 'Not configured'}
-                      </span>
-                    </li>
+                    <PaidProvider
+                      key={alternative.key}
+                      workspaceId={active.workspace.id}
+                      providerKey={alternative.key}
+                      label={alternative.label}
+                      description={alternative.description}
+                      enabled={alternative.enabled}
+                      blockedMessage={whyBlocked(alternative.key)?.message ?? null}
+                      maxDailyCostCents={
+                        settingsByKey.get(alternative.key)?.maxDailyCostCents ?? null
+                      }
+                    />
                   )),
                 )}
               </ul>
             </div>
           ) : null}
+        </Card>
+
+        <Card>
+          <h2 className="mb-1 text-sm font-semibold">Appearance</h2>
+          <p className="mb-4 text-sm text-ink-muted">
+            Light or dark. &ldquo;Auto&rdquo; follows whatever your phone or computer is set to,
+            which is what it does unless you say otherwise.
+          </p>
+          <div className="max-w-xs">
+            <ThemeSwitch theme={parseTheme((await cookies()).get(THEME_COOKIE)?.value)} />
+          </div>
         </Card>
 
         <AdvancedSettings

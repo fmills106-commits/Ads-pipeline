@@ -3,7 +3,7 @@ import { prisma, type Db } from '@/lib/db';
 import { logger } from '@/lib/logger';
 import { toAppError } from '@/lib/errors';
 import { checkBudget, costLimitError, recordCost } from '@/server/cost/ledger';
-import { selectProvider, type EnabledPaidProviders, type Selection } from './registry';
+import { NO_CEILINGS, selectProvider, type EnabledPaidProviders, type Selection } from './registry';
 import type { Provider, ProviderResult } from './types';
 
 /**
@@ -80,12 +80,21 @@ export async function runProvider<P extends Provider, T>(
   // A free selection costs nothing, so the ceiling check is skipped entirely —
   // spending limits must never be able to disable the free path.
   if (selection.descriptor.tier === 'EXTERNAL_PAID') {
+    /*
+     * The ceiling this workspace set for the provider that was actually
+     * selected. Looked up here because selection happens here: until this
+     * line nobody knows which implementation will run, and the fields were
+     * stored in `provider_settings` and never read by anything for exactly
+     * that reason — every call site would have had to load and forward them.
+     */
+    const own = options.enabledPaid?.ceilingsFor(selection.descriptor.key) ?? NO_CEILINGS;
+
     const decision = await checkBudget({
       workspaceId: options.workspaceId,
       tier: 'EXTERNAL_PAID',
       estimatedCostCents,
-      providerDailyCents: options.providerDailyCents ?? null,
-      providerMonthlyCents: options.providerMonthlyCents ?? null,
+      providerDailyCents: options.providerDailyCents ?? own.dailyCents,
+      providerMonthlyCents: options.providerMonthlyCents ?? own.monthlyCents,
       now,
       db,
     });
@@ -196,8 +205,20 @@ export async function loadEnabledPaidProviders(
 ): Promise<EnabledPaidProviders> {
   const rows = await db.providerSetting.findMany({
     where: { workspaceId, enabled: true, tier: 'EXTERNAL_PAID' },
-    select: { providerKey: true },
+    select: { providerKey: true, maxDailyCostCents: true, maxMonthlyCostCents: true },
   });
-  const keys = new Set(rows.map((row) => row.providerKey));
-  return { has: (key) => keys.has(key) };
+
+  const byKey = new Map(rows.map((row) => [row.providerKey, row]));
+
+  return {
+    has: (key) => byKey.has(key),
+    ceilingsFor: (key) => {
+      const row = byKey.get(key);
+      if (!row) return NO_CEILINGS;
+      return {
+        dailyCents: row.maxDailyCostCents,
+        monthlyCents: row.maxMonthlyCostCents,
+      };
+    },
+  };
 }

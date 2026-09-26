@@ -188,3 +188,25 @@ describe('purgeExpiredRateLimits', () => {
     expect(await prisma.rateLimit.count()).toBe(1);
   });
 });
+
+describe('the limit on working out strategy and ad copy', () => {
+  /*
+   * It used to share the scan limit — ten an hour, chosen because a crawl
+   * fetches somebody else's server. Nothing about generating ad copy touches a
+   * third party, and an owner exploring their own Ads page hit "Too many
+   * requests" after ten clicks with nothing to do but wait.
+   */
+  it('is generous enough for a person clicking around', () => {
+    expect(RATE_LIMITS.marketing.limit).toBeGreaterThanOrEqual(30);
+  });
+
+  it('is not the scan limit', () => {
+    expect(RATE_LIMITS.marketing.limit).toBeGreaterThan(RATE_LIMITS.scan.limit);
+    expect(RATE_LIMITS.marketing.action).not.toBe(RATE_LIMITS.scan.action);
+  });
+
+  it('still stops a runaway script', () => {
+    // A limit at all is the point: these calls can reach a paid provider.
+    expect(RATE_LIMITS.marketing.limit).toBeLessThan(RATE_LIMITS.api.limit);
+  });
+});

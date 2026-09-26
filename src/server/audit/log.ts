@@ -47,6 +47,10 @@ export const AUDIT_ACTIONS = {
   campaignBudgetChanged: 'campaign.budget_changed',
   allCampaignsPaused: 'campaign.emergency_pause_all',
   integrationConnected: 'integration.connected',
+  /// A workspace switched a paid service on or off. Kept distinct from a
+  /// generic update so "who let this spend money?" is one query.
+  providerEnabled: 'provider.enabled',
+  providerDisabled: 'provider.disabled',
   integrationTokenRefreshed: 'integration.token_refreshed',
   integrationDisconnected: 'integration.disconnected',
 } as const;

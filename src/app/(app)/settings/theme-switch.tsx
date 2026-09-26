@@ -12,6 +12,10 @@ import { THEME_LABELS, THEMES, type Theme } from '@/lib/theme';
  * A form with three submit buttons: no client component, no JavaScript needed,
  * and each button is a real control a screen reader and a keyboard already
  * understand.
+ *
+ * Lives in Settings rather than the navigation rail. It was in the rail first,
+ * which put a preference nobody changes twice next to the five things people
+ * use constantly — and the owner asked for it tucked away.
  */
 export function ThemeSwitch({ theme }: { theme: Theme }) {
   return (
@@ -50,7 +54,7 @@ export function ThemeSwitch({ theme }: { theme: Theme }) {
   );
 }
 
-/** The rail is 240px wide; the full labels are on `title` and the legend. */
+/** Short labels keep the three options on one line at phone width. */
 const SHORT_LABELS: Record<Theme, string> = {
   system: 'Auto',
   light: 'Light',

@@ -46,6 +46,20 @@ export const RATE_LIMITS = {
    * much as us. Ten an hour is far more than a real site needs.
    */
   scan: { action: 'scan', limit: 10, windowMs: 60 * 60 * 1000 },
+  /**
+   * Working out strategy, offers and ad copy.
+   *
+   * Deliberately not the scan limit, which it borrowed at first: ten an hour
+   * is right for fetching somebody else's server and wrong for a person
+   * pressing buttons on their own account. An owner exploring the Ads page hit
+   * "Too many requests" after ten clicks and had nothing to do but wait.
+   *
+   * Nothing here touches a third party, so the only thing being priced out is
+   * a runaway script. Money is not this rule's job — the cost ceilings govern
+   * spending, and conflating the two gives you a limit that is both too tight
+   * for people and no real protection against cost.
+   */
+  marketing: { action: 'marketing', limit: 60, windowMs: 60 * 60 * 1000 },
   /** A backstop on everything else an authenticated caller can do. */
   api: { action: 'api', limit: 300, windowMs: 60 * 1000 },
 } as const satisfies Record<string, RateLimitRule>;
