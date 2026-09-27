@@ -154,9 +154,17 @@ export async function runWorkerLoop(
  * Fire-and-forget drain, for triggering work from a request handler.
  *
  * A convenience for single-process development so a scan starts without a
- * separate worker running. Production should run `npm run worker`, because a
- * serverless request can be frozen the moment it responds — which is exactly
- * why this is explicitly best-effort and never awaited for correctness.
+ * separate worker running. **It does nothing on a serverless host**, and that is
+ * not a caveat — it is the whole behaviour: the invocation is frozen the moment
+ * it responds, so the promise this starts never runs.
+ *
+ * That was worth learning the expensive way. A scan queued in production was
+ * left entirely to the scheduled worker, which GitHub delivered every two to
+ * four hours rather than the five minutes its cron asks for, and an owner
+ * watched "Reading your site" for twenty minutes before asking what was wrong.
+ * Anything that must actually happen has to be awaited inside a request that is
+ * still open — see the scan status route, which drains while someone is waiting
+ * for the answer.
  */
 export function kickQueue(types?: JobType[]): void {
   void drainQueue({ maxJobs: 5, ...(types ? { types } : {}) }).catch((error: unknown) => {

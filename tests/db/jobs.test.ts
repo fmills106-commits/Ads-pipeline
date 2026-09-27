@@ -303,6 +303,37 @@ describe('the worker', () => {
     expect((await queueDepth(workspace.id)).pending).toBe(0);
   });
 
+  it('does nothing and costs nothing when the queue is empty', async () => {
+    /*
+     * The scan status poll drains on every request, so the empty case is the
+     * common case: it must be one indexed query that claims nothing and returns
+     * at once, not a loop that spends its budget discovering there is no work.
+     */
+    registerJobHandler(JOB_TYPES.websiteScan, async () => ({ ok: true }));
+
+    const startedAt = Date.now();
+    expect(await drainQueue({ maxJobs: 1, budgetMs: 45_000 })).toBe(0);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  it('runs one queued job within its budget, as a waiting page does', async () => {
+    // What the scan poll relies on: somebody is watching, so the work happens
+    // inside the request that asks about it rather than whenever a scheduled
+    // worker next appears — which, measured, was every two to four hours.
+    registerJobHandler(JOB_TYPES.websiteScan, async () => ({ ok: true }));
+    await enqueue({
+      type: JOB_TYPES.websiteScan,
+      workspaceId: workspace.id,
+      payload: payload(),
+      idempotencyKey: 'watched',
+    });
+
+    expect(await drainQueue({ maxJobs: 1, budgetMs: 45_000, types: [JOB_TYPES.websiteScan] })).toBe(
+      1,
+    );
+    expect((await queueDepth(workspace.id)).pending).toBe(0);
+  });
+
   it('never exceeds its job bound', async () => {
     registerJobHandler(JOB_TYPES.websiteScan, async () => ({ ok: true }));
     for (let index = 0; index < 5; index += 1) {

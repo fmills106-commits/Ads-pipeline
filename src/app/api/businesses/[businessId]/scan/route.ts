@@ -1,10 +1,12 @@
 import { z } from 'zod';
+import { getEnv } from '@/lib/env';
 import { validationError } from '@/lib/errors';
+import { logger } from '@/lib/logger';
 import { route } from '@/server/api/handler';
 import { RATE_LIMITS } from '@/server/api/rate-limit';
 import { getScanStatus, startScan } from '@/server/scanner/service';
 import { registerScannerJobs } from '@/server/scanner/job';
-import { kickQueue } from '@/server/jobs/worker';
+import { drainQueue, kickQueue } from '@/server/jobs/worker';
 import { JOB_TYPES } from '@/server/jobs/types';
 import { requireBusinessContext } from '@/server/tenancy/context';
 
@@ -50,12 +52,51 @@ export const POST = route(
   },
 );
 
-/** GET /api/businesses/:businessId/scan — poll the latest scan. */
+/**
+ * GET /api/businesses/:businessId/scan — poll the latest scan, and move it along.
+ *
+ * The polling is also the worker, and that is not a shortcut. A serverless host
+ * gives the application nowhere to keep a process, so the queue is drained by
+ * something outside it — a scheduled GitHub workflow asking for every five
+ * minutes. Measured against the real run history, GitHub delivered that roughly
+ * **every two to four hours**. An owner pressed "Read my website", watched
+ * "Reading your site" for twenty minutes, and reasonably concluded it was
+ * broken. It was not: it was queued behind a scheduler that had not come.
+ *
+ * `kickQueue` in the POST above was supposed to cover this, and cannot: it is
+ * deliberately not awaited, and a serverless invocation is frozen the moment it
+ * responds, so the work it starts is killed before it does anything.
+ *
+ * So the drain happens here, where somebody is demonstrably waiting for the
+ * answer. The page polls every two seconds while a scan is running, and each
+ * poll now claims and runs the work it is asking about. Nothing new to deploy,
+ * nothing to pay for, and the scheduled worker stays exactly as it was — the
+ * safety net for anything queued by a page nobody is looking at.
+ *
+ * Costs nothing when the queue is empty: claiming is one indexed query that
+ * returns no row, and the drain stops immediately.
+ */
 export const GET = route({}, async ({ params, user }) => {
   const businessId = params.businessId;
   if (typeof businessId !== 'string') throw validationError('businessId is required');
 
   const context = await requireBusinessContext(user, businessId);
+
+  /*
+   * Bounded well inside the function's own limit, so a scan that outruns it is
+   * cut short and returned to the queue by the stall reclaimer rather than
+   * killed mid-write. The next poll, two seconds later, picks it up again.
+   */
+  await drainQueue({
+    maxJobs: 1,
+    budgetMs: Math.min(45_000, Math.floor(getEnv().WORKER_MAX_RUN_MS * 0.85)),
+    types: [JOB_TYPES.websiteScan],
+  }).catch((error: unknown) => {
+    // A failed job records its own failure and the status below reports it.
+    // Failing the poll as well would tell the owner nothing and hide the state.
+    logger().warn('Draining the queue from a scan poll failed', { error });
+  });
+
   const status = await getScanStatus(context);
 
   return {
