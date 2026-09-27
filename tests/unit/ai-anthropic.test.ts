@@ -478,6 +478,68 @@ describe('when the service itself says no', () => {
     expect(await codeOf(clientFailing(new Error('Request timed out.')))).toBe('PROVIDER_TIMEOUT');
   });
 
+  it('drops the output schema and tries once more, rather than dying on it', async () => {
+    /*
+     * The failure this is here for: the first paid call an owner ever makes,
+     * refused over a parameter that was only ever an optimisation, with their
+     * credit sitting there and every AI action failing from then on.
+     */
+    const seen: Array<{ hadSchema: boolean }> = [];
+    const provider = createAnthropicAIProvider({
+      client: {
+        messages: {
+          create: async (params) => {
+            seen.push({ hadSchema: params.output_config !== undefined });
+            if (seen.length === 1) {
+              throw Object.assign(new Error('output_config: unsupported parameter'), {
+                status: 400,
+              });
+            }
+            return {
+              id: 'msg',
+              type: 'message',
+              role: 'assistant',
+              model: 'claude-sonnet-5',
+              content: [{ type: 'text', text: '{"headline":"second time"}', citations: null }],
+              stop_reason: 'end_turn',
+              stop_sequence: null,
+              stop_details: null,
+              usage: { input_tokens: 10, output_tokens: 5 },
+            } as unknown as Anthropic.Messages.Message;
+          },
+        },
+      },
+    });
+
+    const result = await provider.complete(
+      request({ outputSchema: { type: 'object', properties: {}, required: [] } }),
+    );
+
+    expect(result.value).toEqual({ headline: 'second time' });
+    expect(seen).toEqual([{ hadSchema: true }, { hadSchema: false }]);
+  });
+
+  it('does not retry a 400 that is about something else', async () => {
+    // Retrying a genuinely malformed request just buys the same rejection
+    // twice, at the price of a second call.
+    let calls = 0;
+    const provider = createAnthropicAIProvider({
+      client: {
+        messages: {
+          create: async () => {
+            calls += 1;
+            throw Object.assign(new Error('max_tokens: must be greater than 0'), { status: 400 });
+          },
+        },
+      },
+    });
+
+    await expect(
+      provider.complete(request({ outputSchema: { type: 'object', properties: {} } })),
+    ).rejects.toMatchObject({ code: 'PROVIDER_ERROR' });
+    expect(calls).toBe(1);
+  });
+
   it('refuses to build itself with no key at all', () => {
     // Unreachable through selection, which filters on the credentials. Kept
     // because "unreachable" is a property of today's call sites.

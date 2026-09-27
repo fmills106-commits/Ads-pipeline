@@ -242,6 +242,41 @@ class AnthropicAIProvider implements AIProvider {
     try {
       return await this.client.messages.create(params, { timeout: TIMEOUT_MS });
     } catch (thrown) {
+      /*
+       * One retry without the output schema, and only for a refusal that names
+       * it.
+       *
+       * Constraining generation to the caller's shape is an optimisation: it
+       * makes an unusable response rarer, and an unusable response costs a
+       * second billed call. But the request is built from this build's
+       * understanding of an API that moves, and the parameter is the most
+       * likely part of it to be refused by an account, a model or a version
+       * that does not take it.
+       *
+       * Without this, the first paid call an owner ever makes would fail and
+       * keep failing, with their credit sitting there — over a parameter that
+       * was only ever making things nicer. The instruction already asks for
+       * JSON only, and the validation and single repair behind it are unchanged,
+       * so the fallback is the same request with one convenience removed.
+       *
+       * Loud, never silent: a warning is logged, and a 400 for any other reason
+       * is not retried, because retrying a genuinely malformed request just
+       * produces the same rejection twice.
+       */
+      if (params.output_config && refusedTheSchema(thrown)) {
+        const { output_config: _discarded, ...withoutSchema } = params;
+        logger().warn('Anthropic refused the output schema; retrying without it', {
+          provider: DESCRIPTOR.key,
+          model: params.model,
+        });
+
+        try {
+          return await this.client.messages.create(withoutSchema, { timeout: TIMEOUT_MS });
+        } catch (second) {
+          throw translate(second);
+        }
+      }
+
       throw translate(thrown);
     }
   }
@@ -315,6 +350,20 @@ function statusOf(thrown: unknown): number | undefined {
   if (typeof thrown !== 'object' || thrown === null) return undefined;
   const status = (thrown as { status?: unknown }).status;
   return typeof status === 'number' ? status : undefined;
+}
+
+/**
+ * Whether a rejection is about the output schema specifically.
+ *
+ * Deliberately narrow. A 400 means "this request was wrong", and most of the
+ * ways it can be wrong are not fixed by dropping a parameter — retrying those
+ * spends a second call to be told the same thing. So this asks whether the
+ * service named the thing that would be removed.
+ */
+function refusedTheSchema(thrown: unknown): boolean {
+  if (statusOf(thrown) !== 400) return false;
+  const message = thrown instanceof Error ? thrown.message : String(thrown);
+  return /output_config|json_schema|output schema|structured output/i.test(message);
 }
 
 function isTimeout(thrown: unknown): boolean {
