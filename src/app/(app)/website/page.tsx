@@ -8,6 +8,7 @@ import { getEnv } from '@/lib/env';
 import { ScanControl } from './scan-control';
 import { WebsiteAddress } from './website-address';
 import { ProductDetails } from './product-details';
+import { ProductLook, type VisualBrief } from './product-look';
 import { BusinessNotes } from './business-notes';
 import { BlockedHelp } from './blocked-help';
 import { PauseControl } from '../dashboard/pause-control';
@@ -233,6 +234,14 @@ export default async function WebsitePage() {
                             costCents={product.costCents}
                             priceCents={product.priceCents}
                             currency={product.currency ?? 'USD'}
+                          />
+
+                          <ProductLook
+                            businessId={business.id}
+                            productId={product.id}
+                            productName={product.name}
+                            brief={(product.visualBrief as VisualBrief | null) ?? null}
+                            writtenAt={product.visualBriefAt?.toISOString() ?? null}
                           />
                         </div>
                       </li>

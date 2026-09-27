@@ -8,7 +8,7 @@ import { crawlWebsite } from '@/server/scanner/crawler';
 import { persistScan } from '@/server/scanner/persist';
 import { createLocalWebFetchProvider } from '@/server/providers/local/web-fetch';
 import { analyseBusiness, getAnalysis } from '@/server/marketing/analysis';
-import { generateAdCopy, generateStrategies } from '@/server/marketing/engine';
+import { describeProductLook, generateAdCopy, generateStrategies } from '@/server/marketing/engine';
 import {
   createOffers,
   getOfferRules,
@@ -199,6 +199,80 @@ describe('strategies', () => {
     });
 
     await expect(generateStrategies(theirContext, myProduct.id)).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+    });
+  });
+});
+
+describe('how a product looks', () => {
+  /*
+   * The failure this exists for: the engine produced an accurate reading of a
+   * shop — foam, 5.5 inches, sealed wrappers, twelve designs — the owner pasted
+   * it into an image generator, and got a bow-tied black cat and a Frankenstein
+   * head. They sell neither. Ad copy has nowhere to put appearance, so the
+   * generator filled the silence with the category's most generic imagery.
+   *
+   * Run here on the free provider, which cannot see, because that is the state
+   * in which inventing an appearance would be most tempting and most damaging.
+   */
+  it('admits when nothing has actually looked at the product', async () => {
+    const context = await scannedBusiness();
+    const product = await prisma.product.findFirstOrThrow({
+      where: { businessId: context.businessId },
+    });
+
+    const result = await describeProductLook(context, product.id);
+
+    // The free provider has no eyes. Saying so is the whole point: a brief that
+    // sounded equally confident either way would be worse than none.
+    expect(result.seen).toBe(false);
+    expect(result.brief.imagePrompt.length).toBeGreaterThan(0);
+  });
+
+  it('tells an image tool what not to invent', async () => {
+    const context = await scannedBusiness();
+    const product = await prisma.product.findFirstOrThrow({
+      where: { businessId: context.businessId },
+    });
+
+    const { brief } = await describeProductLook(context, product.id);
+
+    // Negative space is worth more to a generator than description: filling a
+    // gap with a plausible neighbour is exactly what it does otherwise.
+    expect(brief.doNotShow.length).toBeGreaterThan(0);
+    expect(brief.imagePrompt).toMatch(/invent|do not add|nothing is known/i);
+  });
+
+  it('keeps it on the product, to be pasted again later', async () => {
+    const context = await scannedBusiness();
+    const product = await prisma.product.findFirstOrThrow({
+      where: { businessId: context.businessId },
+    });
+
+    await describeProductLook(context, product.id);
+
+    const stored = await prisma.product.findFirstOrThrow({ where: { id: product.id } });
+    expect(stored.visualBrief).not.toBeNull();
+    expect(stored.visualBriefAt).toBeInstanceOf(Date);
+  });
+
+  it('refuses a product belonging to someone else', async () => {
+    const context = await scannedBusiness();
+    const mine = await prisma.product.findFirstOrThrow({
+      where: { businessId: context.businessId },
+    });
+
+    const otherUser = await createTestUser();
+    const otherWorkspace = await createTestWorkspace(otherUser);
+    const theirBusiness = await createBusiness(
+      await requireWorkspaceContext(otherUser, otherWorkspace.id),
+      { name: 'Someone else' },
+    );
+    const theirs = await requireBusinessContext(otherUser, theirBusiness.id);
+
+    // A foreign product is not found rather than forbidden — the same rule the
+    // rest of the engine follows, so nothing leaks the existence of a row.
+    await expect(describeProductLook(theirs, mine.id)).rejects.toMatchObject({
       code: 'VALIDATION_ERROR',
     });
   });

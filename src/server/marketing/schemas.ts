@@ -113,3 +113,60 @@ export const adCopySetSchema = z.object({
   variants: z.array(adCopyVariantSchema).min(1).max(5),
 });
 export type AdCopySet = z.infer<typeof adCopySetSchema>;
+
+/**
+ * What the product looks like, for whoever or whatever makes the picture.
+ *
+ * This exists because of a specific, instructive failure. The engine produced a
+ * genuinely good reading of a shop — soft slow-rising foam, 5.5 inches, sealed
+ * wrappers, twelve Halloween designs, not edible, ages 14 and over — the owner
+ * pasted it into an image generator, and got back a bow-tied black cat, a
+ * Frankenstein head and a haunted-house print. None of which they sell.
+ *
+ * Nothing had gone wrong with the writing. The failure was that ad copy has
+ * nowhere to put *appearance*, so the image model filled the silence with the
+ * most generic Halloween imagery available. A picture cannot be prompted out of
+ * facts about shipping and materials.
+ *
+ * So this is a different shape for a different job, and two of its fields matter
+ * more than the rest:
+ *
+ *  - `doNotShow` — the negative space. "No cats, no skeletons" is worth more to
+ *    an image generator than any amount of positive description, because
+ *    inventing plausible neighbours is exactly what it does with a gap.
+ *  - `seen` — whether the description came from looking at the merchant's
+ *    photographs or from reading their words. A brief written blind is a guess
+ *    about appearance, and must say so rather than sounding equally confident.
+ */
+export const visualBriefSchema = z.object({
+  simulated: z.boolean().default(false),
+  /** True only when actual photographs were looked at. */
+  seen: z.boolean().default(false),
+  /** One sentence: what a person would say this is, on seeing it. */
+  looksLike: mediumText,
+  /** Colours actually present, in plain words — "matte orange", not "#F60". */
+  colours: claimList.default([]),
+  /** Shape and finish: what it is, physically. */
+  form: shortText,
+  /** How it is packaged and presented, if the pictures show it. */
+  packaging: shortText.optional(),
+  /** Words and marks visible on the product or its wrapper. */
+  printedText: claimList.default([]),
+  /** How big it is, and what gives that away. */
+  scale: shortText.optional(),
+  /**
+   * What an image of this must not contain.
+   *
+   * The most valuable field here. Left empty, a generator invents; filled, it
+   * has something to avoid.
+   */
+  doNotShow: claimList.default([]),
+  /**
+   * A prompt the owner can paste straight into an image tool.
+   *
+   * Composed from the fields above rather than written freely, so it cannot
+   * contain a detail the rest of the brief does not support.
+   */
+  imagePrompt: z.string().trim().min(1).max(1_200),
+});
+export type VisualBrief = z.infer<typeof visualBriefSchema>;

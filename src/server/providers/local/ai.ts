@@ -93,6 +93,45 @@ const HANDLERS: Record<string, (request: AICompletionRequest<unknown>) => unknow
     };
   },
 
+  /**
+   * What the product looks like — except this provider cannot see.
+   *
+   * The honest output here is not a description. It is the merchant's own
+   * words about their own pictures, handed back with `seen: false` and a
+   * `doNotShow` list that says the one useful thing a blind writer knows: that
+   * anything not named here is an invention.
+   *
+   * It would be easy to make this read better by guessing — "spooky Halloween
+   * characters in festive colours" — and that guess is exactly what sent an
+   * owner's image generator off to draw a bow-tied cat they do not sell.
+   */
+  'product.describe': (request) => {
+    const product = request.data?.productName ?? 'this product';
+    const alts = (request.data?.imageDescriptions ?? '')
+      .split('\n')
+      .filter((line) => line.startsWith('- '))
+      .map((line) => line.slice(2).trim())
+      .filter((line) => line !== '')
+      .slice(0, 8);
+
+    return {
+      simulated: true,
+      seen: false,
+      looksLike:
+        alts.length > 0
+          ? `The site's own words about its pictures: ${alts.join('; ')}.`
+          : `No description of ${product}'s appearance was found on the site, and the free version cannot look at photographs.`,
+      colours: [],
+      form: 'Not established — nothing here has looked at the pictures.',
+      printedText: [],
+      doNotShow: ['Anything not named above. Nothing here comes from looking at the product.'],
+      imagePrompt:
+        alts.length > 0
+          ? `A product photograph of ${product}. Everything known about its appearance: ${alts.join('; ')}. Do not add designs, characters or colours beyond these — they would be invented.`
+          : `A plain product photograph of ${product} on a neutral background. Nothing is known about its appearance, so invent nothing: no characters, no seasonal decoration, no packaging detail.`,
+    };
+  },
+
   'copy.generate': (request) => {
     const product = request.data?.productName ?? 'this product';
     /*

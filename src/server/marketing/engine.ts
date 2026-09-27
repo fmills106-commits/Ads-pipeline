@@ -9,7 +9,7 @@ import type { BusinessContext } from '@/server/tenancy/context';
 import { generate } from './ai';
 import { checkClaims, type ClaimEvidence, type ClaimViolation } from './claims';
 import { activeOffers } from './offers';
-import { adCopySetSchema, strategySetSchema } from './schemas';
+import { adCopySetSchema, strategySetSchema, visualBriefSchema, type VisualBrief } from './schemas';
 import { gatherEvidence } from './evidence';
 
 /**
@@ -147,6 +147,105 @@ export async function generateStrategies(
   );
 
   return { created: created.count, decisionId: result.decisionId, simulated: result.simulated };
+}
+
+export interface VisualBriefResult {
+  brief: VisualBrief;
+  decisionId: string;
+  simulated: boolean;
+  /** True when actual photographs were looked at, rather than words about them. */
+  seen: boolean;
+}
+
+/**
+ * Describes what one product looks like, from its own photographs.
+ *
+ * Separate from ad copy on purpose, and the reason is worth keeping. An owner
+ * took this engine's reading of their shop — accurate about materials, size,
+ * packaging and shipping — pasted it into an image generator, and got back a
+ * bow-tied black cat and a Frankenstein head. Nothing had gone wrong with the
+ * writing. Ad copy has nowhere to put *appearance*, and an image model fills
+ * that silence with the most generic imagery its subject allows.
+ *
+ * So this produces a brief rather than prose, and two of its fields do the real
+ * work: what must not appear, and whether anything actually looked at the
+ * product. A brief written blind is a guess, and says so.
+ */
+export async function describeProductLook(
+  context: BusinessContext,
+  productId: string,
+  db: Db = prisma,
+): Promise<VisualBriefResult> {
+  requireRunnable(context);
+
+  const product = await requireProduct(context, productId, db);
+  const evidence = await gatherEvidence(context, { productId: product.id }, db);
+
+  const result = await generate({
+    context,
+    task: 'product.describe',
+    instruction: [
+      'Describe what this product looks like, for someone who has to make a',
+      'picture of it and has never seen one.',
+      'If photographs are attached, describe those and nothing else: the shape,',
+      'the colours actually present, the finish, the packaging, any words or',
+      'marks printed on it, and what gives away its size. Set "seen" to true.',
+      'If no photographs are attached, say so by setting "seen" to false and',
+      'describe only what the supplied words establish. Do not fill the gap with',
+      'what a product like this usually looks like — that guess is precisely how',
+      'a generated picture ends up showing something the merchant does not sell.',
+      'Fill "doNotShow" with the specific things an image of this must not',
+      'contain: designs, characters, colours or props that would be inventions.',
+      'Where the material names what the range does and does not include, that is',
+      'the most useful thing you can put there.',
+      'Compose "imagePrompt" only from what you put in the other fields.',
+    ].join(' '),
+    data: {
+      productName: product.name,
+      productDetails: describeProduct(product),
+      ownerNotes: evidence.ownerNotesText,
+      websiteText: evidence.pageText,
+      imageDescriptions: evidence.imageText,
+    },
+    images: evidence.imageUrls.map((url) => ({ url })),
+    schema: visualBriefSchema,
+    inputSummary: `How "${product.name}" looks, from ${evidence.imageUrls.length} photograph(s)`,
+    db,
+  });
+
+  /*
+   * What was actually sent, not what the model claims. A model told to set a
+   * flag honestly usually does, and "usually" is not the standard for a field
+   * whose whole job is to tell an owner whether to trust the description.
+   */
+  const seen = evidence.imageUrls.length > 0 && result.value.seen && !result.simulated;
+
+  await db.product.update({
+    where: { id: product.id },
+    data: {
+      visualBrief: { ...result.value, seen } as never,
+      visualBriefAt: new Date(),
+    },
+  });
+
+  await recordActivity(
+    context,
+    {
+      kind: 'visualBriefReady',
+      message: seen
+        ? `Looked at the pictures of ${product.name} and wrote down what it looks like.`
+        : `Wrote down what ${product.name} looks like, from your words — no pictures were read.`,
+      detail: { productId: product.id, seen },
+    },
+    db,
+  );
+
+  return {
+    brief: { ...result.value, seen },
+    decisionId: result.decisionId,
+    simulated: result.simulated,
+    seen,
+  };
 }
 
 export interface CopyResult {

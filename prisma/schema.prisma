@@ -715,6 +715,19 @@ model Product {
   ownerDescription String?
   ownerDescribedAt DateTime?
 
+  /// What this product looks like, written for whoever makes the picture.
+  ///
+  /// A `VisualBrief`: appearance, colours, packaging, printed words, scale, and
+  /// — the field that earns the rest — what an image of it must not contain.
+  /// Stored here rather than left among the decision records because it is the
+  /// one output an owner returns to and pastes again.
+  ///
+  /// Carries `seen`, which says whether photographs were actually looked at. A
+  /// brief written from words alone is a guess about appearance and must not
+  /// read like an observation.
+  visualBrief      Json?
+  visualBriefAt    DateTime?
+
   priceCents        Int?
   /// A "was" price, only when the page states one explicitly.
   comparePriceCents Int?

@@ -32,6 +32,7 @@ export const ACTIVITY_KINDS = {
   analysisReady: { icon: '🧠', severity: 'INFO' },
   strategiesGenerated: { icon: '🤖', severity: 'INFO' },
   adCopyReady: { icon: '✍️', severity: 'INFO' },
+  visualBriefReady: { icon: '👁️', severity: 'INFO' },
   creativesGenerated: { icon: '🎨', severity: 'INFO' },
   creativeNeedsReview: { icon: '👀', severity: 'ATTENTION' },
   offerProposed: { icon: '🏷️', severity: 'ATTENTION' },
