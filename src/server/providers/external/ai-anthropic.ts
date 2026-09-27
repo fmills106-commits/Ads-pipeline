@@ -263,21 +263,19 @@ class AnthropicAIProvider implements AIProvider {
        * is not retried, because retrying a genuinely malformed request just
        * produces the same rejection twice.
        */
-      if (params.output_config && refusedTheSchema(thrown)) {
-        const { output_config: _discarded, ...withoutSchema } = params;
-        logger().warn('Anthropic refused the output schema; retrying without it', {
-          provider: DESCRIPTOR.key,
-          model: params.model,
-        });
+      const retry = withoutTheRefusedPart(params, thrown);
+      if (!retry) throw translate(thrown);
 
-        try {
-          return await this.client.messages.create(withoutSchema, { timeout: TIMEOUT_MS });
-        } catch (second) {
-          throw translate(second);
-        }
+      logger().warn(`Anthropic refused ${retry.dropped}; retrying without it`, {
+        provider: DESCRIPTOR.key,
+        model: params.model,
+      });
+
+      try {
+        return await this.client.messages.create(retry.params, { timeout: TIMEOUT_MS });
+      } catch (second) {
+        throw translate(second);
       }
-
-      throw translate(thrown);
     }
   }
 }
@@ -353,17 +351,69 @@ function statusOf(thrown: unknown): number | undefined {
 }
 
 /**
- * Whether a rejection is about the output schema specifically.
+ * The same request with the refused optional part removed, if there is one.
  *
- * Deliberately narrow. A 400 means "this request was wrong", and most of the
- * ways it can be wrong are not fixed by dropping a parameter — retrying those
- * spends a second call to be told the same thing. So this asks whether the
- * service named the thing that would be removed.
+ * Two parts of this request are conveniences rather than requirements, and both
+ * can be refused for reasons that have nothing to do with the words being sent:
+ *
+ *  - **The output schema**, which an account, a model or an API version may not
+ *    take. It only makes an unusable answer rarer; the instruction already asks
+ *    for JSON, and validation and repair sit behind it either way.
+ *  - **The photographs**, which the service fetches itself from the merchant's
+ *    own site — so anything standing between the two, a bot-protection rule most
+ *    likely, breaks the call. The dossier still carries what the merchant wrote
+ *    about those same pictures, so the writing survives losing them.
+ *
+ * Dropping either costs quality. Neither is worth failing over, and the second
+ * one especially: a shop with Cloudflare's bot protection on would otherwise see
+ * every attempt to write an advertisement fail, with a message blaming this
+ * deployment's configuration, which is nowhere near where the problem is.
+ *
+ * Deliberately narrow. A 400 means the request was wrong, and most of the ways
+ * it can be wrong are not fixed by removing something — retrying those spends a
+ * second call to be told the same thing. So this only acts when the service
+ * named the part that would go.
  */
-function refusedTheSchema(thrown: unknown): boolean {
-  if (statusOf(thrown) !== 400) return false;
+function withoutTheRefusedPart(
+  params: Anthropic.Messages.MessageCreateParamsNonStreaming,
+  thrown: unknown,
+): { params: Anthropic.Messages.MessageCreateParamsNonStreaming; dropped: string } | null {
+  if (statusOf(thrown) !== 400) return null;
   const message = thrown instanceof Error ? thrown.message : String(thrown);
-  return /output_config|json_schema|output schema|structured output/i.test(message);
+
+  if (
+    params.output_config &&
+    /output_config|json_schema|output schema|structured output/i.test(message)
+  ) {
+    const { output_config: _dropped, ...rest } = params;
+    return { params: rest, dropped: 'the output schema' };
+  }
+
+  if (/image|fetch|could not (?:be )?(?:load|retriev|download)/i.test(message)) {
+    const withoutPictures = textOnly(params);
+    if (withoutPictures) return { params: withoutPictures, dropped: 'the photographs' };
+  }
+
+  return null;
+}
+
+/**
+ * The same message with every image block taken out, or null if there were none.
+ *
+ * The introduction that precedes the pictures goes with them — left in, it would
+ * tell the model to look at photographs that are no longer there, which is an
+ * invitation to describe one from imagination.
+ */
+function textOnly(
+  params: Anthropic.Messages.MessageCreateParamsNonStreaming,
+): Anthropic.Messages.MessageCreateParamsNonStreaming | null {
+  const [message] = params.messages;
+  if (!message || !Array.isArray(message.content)) return null;
+
+  const text = message.content.filter((block) => block.type === 'text').slice(0, 1);
+  if (text.length === message.content.length) return null;
+
+  return { ...params, messages: [{ ...message, content: text }] };
 }
 
 function isTimeout(thrown: unknown): boolean {

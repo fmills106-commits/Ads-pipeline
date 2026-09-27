@@ -519,6 +519,87 @@ describe('when the service itself says no', () => {
     expect(seen).toEqual([{ hadSchema: true }, { hadSchema: false }]);
   });
 
+  it('writes without the photographs when they cannot be fetched', async () => {
+    /*
+     * The service fetches the images itself, from the merchant's own site — so a
+     * bot-protection rule between the two breaks the call for a reason that has
+     * nothing to do with this deployment. A shop with Cloudflare's bot fighting
+     * on would otherwise see every attempt to write an advertisement fail.
+     */
+    const seen: Array<{ images: number }> = [];
+    const provider = createAnthropicAIProvider({
+      client: {
+        messages: {
+          create: async (params) => {
+            const content = params.messages[0]?.content;
+            seen.push({
+              images: Array.isArray(content)
+                ? content.filter((block) => block.type === 'image').length
+                : 0,
+            });
+            if (seen.length === 1) {
+              throw Object.assign(new Error('Could not fetch image from url'), { status: 400 });
+            }
+            return {
+              id: 'msg',
+              type: 'message',
+              role: 'assistant',
+              model: 'claude-sonnet-5',
+              content: [{ type: 'text', text: '{"headline":"still written"}', citations: null }],
+              stop_reason: 'end_turn',
+              stop_sequence: null,
+              stop_details: null,
+              usage: { input_tokens: 10, output_tokens: 5 },
+            } as unknown as Anthropic.Messages.Message;
+          },
+        },
+      },
+    });
+
+    const result = await provider.complete(
+      request({ images: [{ url: 'https://shop.example/a.jpg' }] }),
+    );
+
+    // The words survive losing the pictures: the dossier still carries what the
+    // merchant wrote about those same images.
+    expect(result.value).toEqual({ headline: 'still written' });
+    expect(seen).toEqual([{ images: 1 }, { images: 0 }]);
+  });
+
+  it('takes the invitation to look at them away too', async () => {
+    let second: Anthropic.Messages.MessageCreateParamsNonStreaming | undefined;
+    const provider = createAnthropicAIProvider({
+      client: {
+        messages: {
+          create: async (params) => {
+            if (!second) {
+              second = params;
+              throw Object.assign(new Error('image could not be retrieved'), { status: 400 });
+            }
+            second = params;
+            return {
+              id: 'msg',
+              type: 'message',
+              role: 'assistant',
+              model: 'claude-sonnet-5',
+              content: [{ type: 'text', text: '{"headline":"ok"}', citations: null }],
+              stop_reason: 'end_turn',
+              stop_sequence: null,
+              stop_details: null,
+              usage: { input_tokens: 10, output_tokens: 5 },
+            } as unknown as Anthropic.Messages.Message;
+          },
+        },
+      },
+    });
+
+    await provider.complete(request({ images: [{ url: 'https://shop.example/a.jpg' }] }));
+
+    // Telling a model to look at photographs that are no longer attached is an
+    // invitation to describe one from imagination.
+    expect(JSON.stringify(second?.messages[0]?.content)).not.toMatch(/photograph/i);
+  });
+
   it('does not retry a 400 that is about something else', async () => {
     // Retrying a genuinely malformed request just buys the same rejection
     // twice, at the price of a second call.
